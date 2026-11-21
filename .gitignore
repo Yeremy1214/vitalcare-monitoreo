@@ -1,0 +1,19 @@
+# Datos de ejecución: cada quien genera los suyos al correr el programa
+vitalcare.db
+vitalcare.db-wal
+vitalcare.db-shm
+datos_sesion/
+evidencias/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

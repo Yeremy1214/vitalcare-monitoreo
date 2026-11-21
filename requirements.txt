@@ -1,0 +1,5 @@
+# Única librería obligatoria
+matplotlib>=3.7
+
+# Solo hace falta el día que se use la fuente Bluetooth con la pulsera real:
+# bleak>=0.21
