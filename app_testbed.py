@@ -526,8 +526,15 @@ class Aplicacion(tk.Tk):
                  bd_ruta=ARCHIVO_BD, sembrar=True):
         super().__init__()
         self.title("VitalCare · Testbed de pulsera de signos vitales (ITT466)")
-        self.geometry("1360x860+0+0")
-        self.minsize(1180, 740)
+        ancho_pantalla, alto_pantalla = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{min(1360, ancho_pantalla)}x{min(860, alto_pantalla - 60)}+0+0")
+        self.minsize(1180, 700)
+        if alto_pantalla < 900:
+            # En pantallas de 768 px de alto conviene aprovechar hasta el último pixel
+            try:
+                self.state("zoomed")          # Windows
+            except tk.TclError:
+                self.attributes("-zoomed", True)  # Linux
         self.configure(bg=BG)
         self.fam = elegir_familia(self)
         self.intervalo_sim = intervalo_sim
@@ -687,22 +694,22 @@ class Aplicacion(tk.Tk):
                     activo="#D3DAE1").pack(side=tk.RIGHT)
 
         izq = tk.Frame(barra, bg=CARD)
-        izq.pack(side=tk.LEFT, padx=14, pady=8)
-        tk.Label(izq, text="Paciente en monitoreo", bg=CARD, fg=MUTED,
-                 font=(self.fam, 8, "bold")).pack(anchor="w")
+        izq.pack(side=tk.LEFT, padx=14, pady=6, fill=tk.X, expand=True)
         fila = tk.Frame(izq, bg=CARD)
-        fila.pack(anchor="w")
+        fila.pack(anchor="w", fill=tk.X)
+        tk.Label(fila, text="Paciente en monitoreo", bg=CARD, fg=MUTED,
+                 font=(self.fam, 9, "bold")).pack(side=tk.LEFT, padx=(0, 10))
         self.var_paciente = tk.StringVar(value="Sin paciente seleccionado")
         self.combo_paciente = ttk.Combobox(fila, textvariable=self.var_paciente, state="readonly",
                                            width=36, font=(self.fam, 10))
         self.combo_paciente.pack(side=tk.LEFT)
         self.combo_paciente.bind("<<ComboboxSelected>>", self._al_elegir_paciente)
         self.lbl_ficha = tk.Label(izq, text="Elija un paciente ingresado o trabaje en modo libre.",
-                                  bg=CARD, fg=MUTED, font=(self.fam, 9))
-        self.lbl_ficha.pack(anchor="w", pady=(2, 0))
+                                  bg=CARD, fg=MUTED, font=(self.fam, 9), anchor="w")
+        self.lbl_ficha.pack(anchor="w", fill=tk.X, pady=(1, 0))
 
     def _construir_banner(self):
-        self.banner = tk.Frame(self.tab_mon, bg=GRIS_BG, height=54)
+        self.banner = tk.Frame(self.tab_mon, bg=GRIS_BG, height=48)
         self.banner.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(12, 0))
         self.banner.pack_propagate(False)
         self.banner_barra = tk.Frame(self.banner, width=8, bg=GRIS)
@@ -739,11 +746,14 @@ class Aplicacion(tk.Tk):
 
     def _construir_cuerpo(self):
         cuerpo = tk.Frame(self.tab_mon, bg=BG)
-        cuerpo.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=12)
+        cuerpo.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=(10, 8))
 
         # --- gráficas ---
-        panel = tk.Frame(cuerpo, bg=CARD, highlightthickness=1, highlightbackground=BORDE, highlightcolor=BORDE)
-        panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        col_izq = tk.Frame(cuerpo, bg=BG)
+        col_izq.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        panel = tk.Frame(col_izq, bg=CARD, highlightthickness=1, highlightbackground=BORDE,
+                         highlightcolor=BORDE)
+        panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         cab = tk.Frame(panel, bg=CARD)
         cab.pack(fill=tk.X, padx=14, pady=(10, 0))
         tk.Label(cab, text="Tendencias en vivo", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold")).pack(side=tk.LEFT)
@@ -759,7 +769,7 @@ class Aplicacion(tk.Tk):
         self._pintar_segmentos()
 
         matplotlib.rcParams["font.family"] = [self.fam, "DejaVu Sans"]
-        self.fig = Figure(figsize=(7, 5), dpi=100, facecolor=CARD)
+        self.fig = Figure(figsize=(7, 4), dpi=100, facecolor=CARD)
         self.ax = {}
         self._bandas = {}
         self.lineas = {}
@@ -794,54 +804,69 @@ class Aplicacion(tk.Tk):
         formato = mdates.DateFormatter("%H:%M:%S")
         self.ax["temp"].xaxis.set_major_formatter(formato)
         self.ax["temp"].xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=7))
-        self.fig.subplots_adjust(left=0.065, right=0.985, top=0.915, bottom=0.085, hspace=0.50)
+        # Reparto automático del alto: así los títulos no se montan en pantallas pequeñas
+        self.fig.set_layout_engine("constrained", h_pad=0.12, hspace=0.10, w_pad=0.04)
         self.canvas = FigureCanvasTkAgg(self.fig, master=panel)
         self.canvas.get_tk_widget().configure(bg=CARD, highlightthickness=0)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
+        # Signos que la pulsera no mide: franja compacta debajo de las gráficas.
+        # Se empaqueta antes que las gráficas para que conserve su altura en pantallas pequeñas.
+        franja = tk.Frame(col_izq, bg=CARD, highlightthickness=1, highlightbackground=BORDE,
+                          highlightcolor=BORDE)
+        franja.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+        panel.pack_forget()
+        panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        tk.Label(franja, text="Signos tomados a mano", bg=CARD, fg=TEXTO,
+                 font=(self.fam, 10, "bold")).pack(side=tk.LEFT, padx=(14, 18), pady=9)
+        self._boton(franja, "Registrar signos a mano", self.registrar_signos_manuales, color=GRIS_BG,
+                    fg=TEXTO, activo="#D3DAE1").pack(side=tk.RIGHT, padx=14)
+        self.lbl_manual = {}
+        for clave, texto in (("pa", "Presión arterial"), ("fr", "Frecuencia respiratoria")):
+            celda = tk.Frame(franja, bg=CARD)
+            celda.pack(side=tk.LEFT, padx=(0, 26))
+            tk.Label(celda, text=texto, bg=CARD, fg=MUTED, font=(self.fam, 8)).pack(anchor="w")
+            linea = tk.Frame(celda, bg=CARD)
+            linea.pack(anchor="w")
+            val = tk.Label(linea, text="sin registrar", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold"))
+            val.pack(side=tk.LEFT)
+            pie_m = tk.Label(linea, text="", bg=CARD, fg=MUTED, font=(self.fam, 8))
+            pie_m.pack(side=tk.LEFT, padx=(8, 0), pady=(3, 0))
+            self.lbl_manual[clave] = (val, pie_m)
+
         # --- columna derecha ---
-        lateral = tk.Frame(cuerpo, bg=BG, width=382)
+        lateral = tk.Frame(cuerpo, bg=BG, width=404)
         lateral.pack(side=tk.RIGHT, fill=tk.Y, padx=(12, 0))
         lateral.pack_propagate(False)
 
-        # Enlace
+        # Enlace: tres cifras y una línea de detalle, para dejarle sitio a las alertas
         enlace = self._panel(lateral, "Enlace con la pulsera")
         enlace.pack(side=tk.TOP, fill=tk.X)
         self.lbl_enlace = {}
         cuadro = tk.Frame(enlace, bg=CARD)
-        cuadro.pack(fill=tk.X, padx=14, pady=(0, 10))
+        cuadro.pack(fill=tk.X, padx=14)
         for c in range(3):
             cuadro.columnconfigure(c, weight=1, uniform="enlace")
-        celdas = [("paquetes", "Recibidos"), ("recuperados", "Recuperados"), ("perdidos", "Perdidos reales"),
-                  ("ultimo", "Último paquete"), ("sensor", "Sensor"), ("espera", "En recuperación")]
-        for i, (clave, texto) in enumerate(celdas):
-            r, c = divmod(i, 3)
+        for i, (clave, texto) in enumerate((("paquetes", "Recibidos"), ("recuperados", "Recuperados"),
+                                            ("perdidos", "Perdidos reales"))):
             celda = tk.Frame(cuadro, bg=CARD)
-            celda.grid(row=r, column=c, sticky="w", pady=2)
-            tk.Label(celda, text=texto, bg=CARD, fg=MUTED, font=(self.fam, 8)).pack(anchor="w")
-            lbl = tk.Label(celda, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 10, "bold"))
-            lbl.pack(anchor="w")
-            self.lbl_enlace[clave] = lbl
-
-        # Signos que la pulsera no mide
-        manual = self._panel(lateral, "Signos tomados a mano")
-        manual.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
-        cm = tk.Frame(manual, bg=CARD)
-        cm.pack(fill=tk.X, padx=14, pady=(0, 10))
-        for c in range(2):
-            cm.columnconfigure(c, weight=1, uniform="man")
-        self.lbl_manual = {}
-        for i, (clave, texto) in enumerate((("pa", "Presión arterial"), ("fr", "Frec. respiratoria"))):
-            celda = tk.Frame(cm, bg=CARD)
             celda.grid(row=0, column=i, sticky="w")
             tk.Label(celda, text=texto, bg=CARD, fg=MUTED, font=(self.fam, 8)).pack(anchor="w")
-            val = tk.Label(celda, text="sin registrar", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold"))
-            val.pack(anchor="w")
-            pie_m = tk.Label(celda, text="", bg=CARD, fg=MUTED, font=(self.fam, 8))
-            pie_m.pack(anchor="w")
-            self.lbl_manual[clave] = (val, pie_m)
-        self._boton(manual, "Registrar signos a mano", self.registrar_signos_manuales, color=GRIS_BG,
-                    fg=TEXTO, activo="#D3DAE1").pack(anchor="w", padx=14, pady=(0, 10))
+            lbl = tk.Label(celda, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold"))
+            lbl.pack(anchor="w")
+            self.lbl_enlace[clave] = lbl
+        detalle = tk.Frame(enlace, bg=CARD)
+        detalle.pack(fill=tk.X, padx=14, pady=(4, 10))
+        for i, (clave, texto) in enumerate((("ultimo", "Último"), ("sensor", "Sensor"),
+                                            ("espera", "Recuperando"))):
+            if i:
+                tk.Label(detalle, text="·", bg=CARD, fg=BORDE,
+                         font=(self.fam, 9)).pack(side=tk.LEFT, padx=5)
+            tk.Label(detalle, text=texto + ":", bg=CARD, fg=MUTED,
+                     font=(self.fam, 8)).pack(side=tk.LEFT, pady=(2, 0))
+            lbl = tk.Label(detalle, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 9, "bold"))
+            lbl.pack(side=tk.LEFT, padx=(3, 0))
+            self.lbl_enlace[clave] = lbl
 
         # Alertas
         self.panel_alertas = self._panel(lateral, "Alertas")
