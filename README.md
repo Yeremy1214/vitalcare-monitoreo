@@ -1,24 +1,10 @@
-# VitalCare · Sistema de monitoreo de signos vitales
+# VitalCare · Estación de monitoreo (versión 3)
 
-Proyecto de grado ITT466 · Pontificia Universidad Católica Madre y Maestra
-Yeremy Veloz Marte y Luis Eduardo Suarez Beato · Asesora: Arlene Estévez Colón
+Aplicación en Python que recibe los datos de la pulsera de signos vitales, los muestra en vivo,
+genera las alertas y lleva el registro del centro: quién está ingresado, qué pulsera tiene puesta
+cada paciente y qué hizo el personal con cada alerta.
 
-Sistema inteligente de monitoreo de signos vitales y gestión de emergencias hospitalarias mediante
-una pulsera wearable IoT de bajo costo. Este repositorio contiene la **estación de monitoreo**: el
-programa que recibe los datos de la pulsera, los muestra en vivo, genera las alertas y lleva el
-registro de pacientes y dispositivos.
-
-| | |
-|---|---|
-| Etapa | Anteproyecto |
-| Estado | Funciona con simulador, Bluetooth (BLE) y WiFi/UDP |
-| Pruebas | 32 automáticas, sin hardware |
-| Protocolo de la pulsera | [docs/contrato_pulsera.md](docs/contrato_pulsera.md) |
-| Cómo trabajamos en equipo | [docs/guia_para_luis.md](docs/guia_para_luis.md) |
-
-![Pantalla de monitoreo](docs/capturas/a_monitoreo.png)
-
----
+Es el programa que se presenta a la asesora y al jurado en la etapa de Anteproyecto.
 
 ## Qué se necesita
 
@@ -52,7 +38,7 @@ Debe terminar con `32 de 32 pruebas correctas`.
 
 | Pestaña | Para qué sirve |
 |---|---|
-| **Monitoreo** | La pantalla de siempre: signos en vivo, tendencias, enlace y alertas, ahora con el paciente y su pulsera en la cabecera |
+| **Monitoreo** | Los seis signos en tarjetas, las tendencias, las alertas en vivo y el estado del enlace, con el paciente y su pulsera en la cabecera |
 | **Pacientes** | Ingreso, edición, asignación y cambio de pulsera, signos tomados a mano, alta y eliminación |
 | **Pulseras** | Inventario por número de serie, con su estado, su batería y a quién está asignada |
 | **Configuración** | Umbrales clínicos por perfil, parámetros de alerta del centro y auditoría |
@@ -90,9 +76,11 @@ mezclan los datos de dos personas.
 ## Signos que la pulsera no mide
 
 La pulsera mide frecuencia cardíaca, SpO₂ y temperatura. La **presión arterial** y la **frecuencia
-respiratoria** las toma el personal, así que se registran a mano desde *Signos a mano*, con la hora
-y el nombre de quien las tomó. El sistema las compara con el rango del paciente y, si están fuera,
-genera una alerta igual que con los signos de la pulsera.
+respiratoria** las toma el personal, así que tienen su propia tarjeta junto a los demás signos: se
+pulsa sobre ella (o en *Signos a mano*) y se abre el formulario, que guarda el valor con la hora y
+el nombre de quien lo tomó. El sistema los compara con el rango del paciente, los pinta en ámbar o
+rojo igual que los otros signos, y si están fuera de rango generan alerta y cambian el estado
+general que muestra el banner.
 
 ## Umbrales por edad y sexo
 
@@ -155,7 +143,7 @@ cronómetro corriendo. Todo queda en `alertas_*.csv`.
 
 ## Evidencias para el informe
 
-El botón **Evidencia (F8)** guarda una captura de la ventana con fecha y hora en
+El botón **Evidencia (F8)**, en la barra de abajo, guarda una captura de la ventana con fecha y hora en
 `datos_sesion/evidencias/`, y la deja anotada en la auditoría. Sirve para los anexos del informe
 final sin tener que recortar pantallazos a mano.
 

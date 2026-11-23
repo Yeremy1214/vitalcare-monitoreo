@@ -70,7 +70,7 @@ from logica import (
 )
 from registro import CARPETA_DATOS, RegistradorCSV
 from transportes import ESCENARIOS, BLETransport, SimuladorTransport, UDPTransport
-from datos import ARCHIVO_BD, SIGNOS, SIGNOS_MANUALES, BaseDatos, texto_edad
+from datos import ARCHIVO_BD, SIGNOS, SIGNOS_MANUALES, BaseDatos, ahora as ahora_iso, texto_edad
 from estilo import estilos_ttk
 from pantallas import (DialogoAsignar, DialogoMedicion, PantallaConfig, PantallaPacientes,
                        PantallaPulseras, nombre_completo, ubicacion)
@@ -201,7 +201,7 @@ class HiloTransporte(threading.Thread):
 class TarjetaVital(tk.Frame):
     """Tarjeta con el valor actual de un signo vital y su estado."""
 
-    def __init__(self, master, fam, titulo, unidad, rango_txt):
+    def __init__(self, master, fam, titulo, unidad, rango_txt, fuente=30, al_pulsar=None):
         super().__init__(master, bg=CARD, highlightthickness=1, highlightbackground=BORDE, highlightcolor=BORDE)
         self.barra = tk.Frame(self, width=6, bg=GRIS)
         self.barra.pack(side=tk.LEFT, fill=tk.Y)
@@ -216,7 +216,7 @@ class TarjetaVital(tk.Frame):
 
         fila_valor = tk.Frame(cuerpo, bg=CARD)
         fila_valor.pack(fill=tk.X, pady=(4, 0))
-        self.lbl_valor = tk.Label(fila_valor, text="--", bg=CARD, fg=TEXTO, font=(fam, 30, "bold"))
+        self.lbl_valor = tk.Label(fila_valor, text="--", bg=CARD, fg=TEXTO, font=(fam, fuente, "bold"))
         self.lbl_valor.pack(side=tk.LEFT)
         tk.Label(fila_valor, text=unidad, bg=CARD, fg=MUTED, font=(fam, 13)).pack(
             side=tk.LEFT, padx=(6, 0), pady=(10, 0)
@@ -224,6 +224,18 @@ class TarjetaVital(tk.Frame):
         self.lbl_rango = tk.Label(cuerpo, text=rango_txt, bg=CARD, fg=MUTED, font=(fam, 9))
         self.lbl_rango.pack(anchor="w")
         self.actualizar(None, None, "Sin datos")
+        if al_pulsar is not None:
+            self._hacer_pulsable(self, al_pulsar)
+
+    def _hacer_pulsable(self, widget, al_pulsar):
+        """Toda la tarjeta responde al clic, no solo el texto."""
+        widget.bind("<Button-1>", lambda e: al_pulsar())
+        try:
+            widget.configure(cursor="hand2")
+        except tk.TclError:
+            pass
+        for hijo in widget.winfo_children():
+            self._hacer_pulsable(hijo, al_pulsar)
 
     def fijar_pie(self, texto):
         self.lbl_rango.config(text=texto)
@@ -555,6 +567,10 @@ class Aplicacion(tk.Tk):
         self._t_latido = 0.0
         self._ajenos = {}
         self._corte_pendiente = None
+        self._niveles_vitales = {}
+        self._causas_vitales = []
+        self._nivel_manual = {}
+        self._causas_manual = []
 
         # Estado de la conexión y de la sesión
         self.cola = queue.Queue()
@@ -589,6 +605,7 @@ class Aplicacion(tk.Tk):
         self._construir_pie()
         self._construir_cuerpo()
         self._construir_gestion()
+        self._retomar_ultimo_paciente()
         self._al_cambiar_fuente()
         self._redibujar()
         self._revisar_cortes_previos()
@@ -686,8 +703,6 @@ class Aplicacion(tk.Tk):
         self.lbl_pulsera = tk.Label(der, text="Sin pulsera asignada", bg=GRIS_BG, fg=TEXTO,
                                     font=(self.fam, 10, "bold"), padx=10, pady=4)
         self.lbl_pulsera.pack(side=tk.RIGHT, padx=(10, 0))
-        self._boton(der, "Evidencia (F8)", self.capturar_evidencia, color=GRIS_BG,
-                    fg=TEXTO, activo="#D3DAE1").pack(side=tk.RIGHT, padx=(8, 0))
         self._boton(der, "Signos a mano", self.registrar_signos_manuales, color=GRIS_BG, fg=TEXTO,
                     activo="#D3DAE1").pack(side=tk.RIGHT, padx=(8, 0))
         self._boton(der, "Cambiar pulsera", self.cambiar_pulsera, color=GRIS_BG, fg=TEXTO,
@@ -704,9 +719,14 @@ class Aplicacion(tk.Tk):
                                            width=36, font=(self.fam, 10))
         self.combo_paciente.pack(side=tk.LEFT)
         self.combo_paciente.bind("<<ComboboxSelected>>", self._al_elegir_paciente)
-        self.lbl_ficha = tk.Label(izq, text="Elija un paciente ingresado o trabaje en modo libre.",
+        linea_ficha = tk.Frame(izq, bg=CARD)
+        linea_ficha.pack(anchor="w", fill=tk.X, pady=(1, 0))
+        self.lbl_ficha = tk.Label(linea_ficha, text="Elija un paciente ingresado o trabaje en modo libre.",
                                   bg=CARD, fg=MUTED, font=(self.fam, 9), anchor="w")
-        self.lbl_ficha.pack(anchor="w", fill=tk.X, pady=(1, 0))
+        self.lbl_ficha.pack(side=tk.LEFT)
+        self.lbl_alergias = tk.Label(linea_ficha, text="", bg=CARD, fg=ALERTA,
+                                     font=(self.fam, 9, "bold"), anchor="w")
+        self.lbl_alergias.pack(side=tk.LEFT, padx=(8, 0))
 
     def _construir_banner(self):
         self.banner = tk.Frame(self.tab_mon, bg=GRIS_BG, height=48)
@@ -720,29 +740,35 @@ class Aplicacion(tk.Tk):
         self.lbl_causas = tk.Label(self.banner, text="Esperando conexión con la fuente de datos",
                                    bg=GRIS_BG, fg=MUTED, font=(self.fam, 11))
         self.lbl_causas.pack(side=tk.LEFT, padx=(18, 0))
-        self.lbl_paciente = tk.Label(self.banner, text="Dispositivo: --", bg=GRIS_BG, fg=MUTED,
-                                     font=(self.fam, 10, "bold"))
-        self.lbl_paciente.pack(side=tk.RIGHT, padx=16)
-        self.lbl_integridad = tk.Label(self.banner, text="", bg=GRIS_BG, fg=MUTED, font=(self.fam, 10, "bold"))
-        self.lbl_integridad.pack(side=tk.RIGHT, padx=(0, 10))
+        self.lbl_integridad = tk.Label(self.banner, text="", bg=GRIS_BG, fg=MUTED,
+                                       font=(self.fam, 10, "bold"))
+        self.lbl_integridad.pack(side=tk.RIGHT, padx=16)
 
     def _construir_tarjetas(self):
+        """Los seis signos juntos: los tres de la pulsera, los dos de enfermería y la batería."""
         fila = tk.Frame(self.tab_mon, bg=BG)
-        fila.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(12, 0))
-        for i in range(4):
+        fila.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(10, 0))
+        self.orden_tarjetas = ("hr", "spo2", "temp", "pa", "fr", "batt")
+        for i in range(len(self.orden_tarjetas)):
             fila.columnconfigure(i, weight=1, uniform="tarjeta")
         u = self.umbrales
+        abrir = self.registrar_signos_manuales
         self.tarjetas = {
-            "hr": TarjetaVital(fila, self.fam, "FRECUENCIA CARDÍACA", u["hr"]["unidad"],
-                               texto_rango("hr", u)),
-            "spo2": TarjetaVital(fila, self.fam, "OXÍGENO EN SANGRE", "% SpO₂", texto_rango("spo2", u)),
+            "hr": TarjetaVital(fila, self.fam, "FREC. CARDÍACA", u["hr"]["unidad"], texto_rango("hr", u)),
+            "spo2": TarjetaVital(fila, self.fam, "OXÍGENO EN SANGRE", "%", texto_rango("spo2", u)),
             "temp": TarjetaVital(fila, self.fam, "TEMPERATURA", u["temp"]["unidad"],
                                  texto_rango("temp", u)),
-            "batt": TarjetaVital(fila, self.fam, "BATERÍA DE LA PULSERA", "%",
-                                 f"Aviso a menos de {self.cfg['bateria_baja']:g} %"),
+            "pa": TarjetaVital(fila, self.fam, "PRESIÓN ARTERIAL", "mmHg", "la toma enfermería",
+                               fuente=25, al_pulsar=abrir),
+            "fr": TarjetaVital(fila, self.fam, "FREC. RESPIRATORIA", "rpm", "la toma enfermería",
+                               fuente=25, al_pulsar=abrir),
+            "batt": TarjetaVital(fila, self.fam, "BATERÍA", "%",
+                                 f"Aviso bajo {self.cfg['bateria_baja']:g} %"),
         }
-        for i, clave in enumerate(("hr", "spo2", "temp", "batt")):
-            self.tarjetas[clave].grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0 if i == 3 else 6))
+        ultimo = len(self.orden_tarjetas) - 1
+        for i, clave in enumerate(self.orden_tarjetas):
+            self.tarjetas[clave].grid(row=0, column=i, sticky="nsew",
+                                      padx=(0 if i == 0 else 5, 0 if i == ultimo else 5))
 
     def _construir_cuerpo(self):
         cuerpo = tk.Frame(self.tab_mon, bg=BG)
@@ -810,63 +836,10 @@ class Aplicacion(tk.Tk):
         self.canvas.get_tk_widget().configure(bg=CARD, highlightthickness=0)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
-        # Signos que la pulsera no mide: franja compacta debajo de las gráficas.
-        # Se empaqueta antes que las gráficas para que conserve su altura en pantallas pequeñas.
-        franja = tk.Frame(col_izq, bg=CARD, highlightthickness=1, highlightbackground=BORDE,
-                          highlightcolor=BORDE)
-        franja.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
-        panel.pack_forget()
-        panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        tk.Label(franja, text="Signos tomados a mano", bg=CARD, fg=TEXTO,
-                 font=(self.fam, 10, "bold")).pack(side=tk.LEFT, padx=(14, 18), pady=9)
-        self._boton(franja, "Registrar signos a mano", self.registrar_signos_manuales, color=GRIS_BG,
-                    fg=TEXTO, activo="#D3DAE1").pack(side=tk.RIGHT, padx=14)
-        self.lbl_manual = {}
-        for clave, texto in (("pa", "Presión arterial"), ("fr", "Frecuencia respiratoria")):
-            celda = tk.Frame(franja, bg=CARD)
-            celda.pack(side=tk.LEFT, padx=(0, 26))
-            tk.Label(celda, text=texto, bg=CARD, fg=MUTED, font=(self.fam, 8)).pack(anchor="w")
-            linea = tk.Frame(celda, bg=CARD)
-            linea.pack(anchor="w")
-            val = tk.Label(linea, text="sin registrar", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold"))
-            val.pack(side=tk.LEFT)
-            pie_m = tk.Label(linea, text="", bg=CARD, fg=MUTED, font=(self.fam, 8))
-            pie_m.pack(side=tk.LEFT, padx=(8, 0), pady=(3, 0))
-            self.lbl_manual[clave] = (val, pie_m)
-
         # --- columna derecha ---
         lateral = tk.Frame(cuerpo, bg=BG, width=404)
         lateral.pack(side=tk.RIGHT, fill=tk.Y, padx=(12, 0))
         lateral.pack_propagate(False)
-
-        # Enlace: tres cifras y una línea de detalle, para dejarle sitio a las alertas
-        enlace = self._panel(lateral, "Enlace con la pulsera")
-        enlace.pack(side=tk.TOP, fill=tk.X)
-        self.lbl_enlace = {}
-        cuadro = tk.Frame(enlace, bg=CARD)
-        cuadro.pack(fill=tk.X, padx=14)
-        for c in range(3):
-            cuadro.columnconfigure(c, weight=1, uniform="enlace")
-        for i, (clave, texto) in enumerate((("paquetes", "Recibidos"), ("recuperados", "Recuperados"),
-                                            ("perdidos", "Perdidos reales"))):
-            celda = tk.Frame(cuadro, bg=CARD)
-            celda.grid(row=0, column=i, sticky="w")
-            tk.Label(celda, text=texto, bg=CARD, fg=MUTED, font=(self.fam, 8)).pack(anchor="w")
-            lbl = tk.Label(celda, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold"))
-            lbl.pack(anchor="w")
-            self.lbl_enlace[clave] = lbl
-        detalle = tk.Frame(enlace, bg=CARD)
-        detalle.pack(fill=tk.X, padx=14, pady=(4, 10))
-        for i, (clave, texto) in enumerate((("ultimo", "Último"), ("sensor", "Sensor"),
-                                            ("espera", "Recuperando"))):
-            if i:
-                tk.Label(detalle, text="·", bg=CARD, fg=BORDE,
-                         font=(self.fam, 9)).pack(side=tk.LEFT, padx=5)
-            tk.Label(detalle, text=texto + ":", bg=CARD, fg=MUTED,
-                     font=(self.fam, 8)).pack(side=tk.LEFT, pady=(2, 0))
-            lbl = tk.Label(detalle, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 9, "bold"))
-            lbl.pack(side=tk.LEFT, padx=(3, 0))
-            self.lbl_enlace[clave] = lbl
 
         # Alertas
         self.panel_alertas = self._panel(lateral, "Alertas")
@@ -895,6 +868,35 @@ class Aplicacion(tk.Tk):
         self.canvas_alertas.bind("<Enter>", lambda e: self.canvas_alertas.bind_all("<MouseWheel>", rueda))
         self.canvas_alertas.bind("<Leave>", lambda e: self.canvas_alertas.unbind_all("<MouseWheel>"))
 
+        # Enlace: tres cifras y una línea de detalle, para dejarle sitio a las alertas
+        enlace = self._panel(lateral, "Enlace con la pulsera")
+        enlace.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+        self.lbl_enlace = {}
+        cuadro = tk.Frame(enlace, bg=CARD)
+        cuadro.pack(fill=tk.X, padx=14)
+        for c in range(3):
+            cuadro.columnconfigure(c, weight=1, uniform="enlace")
+        for i, (clave, texto) in enumerate((("paquetes", "Recibidos"), ("recuperados", "Recuperados"),
+                                            ("perdidos", "Perdidos reales"))):
+            celda = tk.Frame(cuadro, bg=CARD)
+            celda.grid(row=0, column=i, sticky="w")
+            tk.Label(celda, text=texto, bg=CARD, fg=MUTED, font=(self.fam, 8)).pack(anchor="w")
+            lbl = tk.Label(celda, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 12, "bold"))
+            lbl.pack(anchor="w")
+            self.lbl_enlace[clave] = lbl
+        detalle = tk.Frame(enlace, bg=CARD)
+        detalle.pack(fill=tk.X, padx=14, pady=(4, 10))
+        for i, (clave, texto) in enumerate((("ultimo", "Último"), ("sensor", "Sensor"),
+                                            ("espera", "Recuperando"))):
+            if i:
+                tk.Label(detalle, text="·", bg=CARD, fg=BORDE,
+                         font=(self.fam, 9)).pack(side=tk.LEFT, padx=5)
+            tk.Label(detalle, text=texto + ":", bg=CARD, fg=MUTED,
+                     font=(self.fam, 8)).pack(side=tk.LEFT, pady=(2, 0))
+            lbl = tk.Label(detalle, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 9, "bold"))
+            lbl.pack(side=tk.LEFT, padx=(3, 0))
+            self.lbl_enlace[clave] = lbl
+
     def _panel(self, master, titulo):
         p = tk.Frame(master, bg=CARD, highlightthickness=1, highlightbackground=BORDE, highlightcolor=BORDE)
         tk.Label(p, text=titulo, bg=CARD, fg=TEXTO, font=(self.fam, 11, "bold")).pack(
@@ -915,6 +917,8 @@ class Aplicacion(tk.Tk):
         self._boton(fila_arch, "Pantalla completa (F11)", self._alternar_pantalla_completa, color=GRIS_BG,
                     fg=TEXTO, activo="#D3DAE1").pack(side=tk.RIGHT, padx=(8, 0))
         self._boton(fila_arch, "Abrir carpeta de datos", self._abrir_carpeta, color=GRIS_BG, fg=TEXTO,
+                    activo="#D3DAE1").pack(side=tk.RIGHT, padx=(8, 0))
+        self._boton(fila_arch, "Evidencia (F8)", self.capturar_evidencia, color=GRIS_BG, fg=TEXTO,
                     activo="#D3DAE1").pack(side=tk.RIGHT, padx=(8, 0))
         self._boton(fila_arch, "Resumen de sesión", self._mostrar_resumen).pack(side=tk.RIGHT, padx=(8, 0))
         tk.Checkbutton(fila_arch, text="Sonido de alerta", variable=self.var_sonido, bg=BG, fg=TEXTO,
@@ -991,10 +995,8 @@ class Aplicacion(tk.Tk):
         self.umbrales = nuevos
         if hasattr(self, "tarjetas"):
             for clave in ("hr", "spo2", "temp"):
-                extra = ""
-                if self.paciente_id and "origen" in self.umbrales[clave]:
-                    extra = f"  ·  {self.umbrales[clave]['origen']}"
-                self.tarjetas[clave].fijar_pie(texto_rango(clave, self.umbrales) + extra)
+                self.tarjetas[clave].fijar_pie(texto_rango(clave, self.umbrales))
+            self._pintar_signos_manuales()
         if hasattr(self, "_bandas"):
             for clave, banda in self._bandas.items():
                 lo, hi = self.umbrales[clave]["normal"]
@@ -1033,6 +1035,10 @@ class Aplicacion(tk.Tk):
     def monitorear_paciente(self, pid):
         """Deja la pantalla de monitoreo apuntando a este paciente y su pulsera."""
         self.paciente_id = pid
+        self.bd.ejec("INSERT INTO config (clave, valor, descripcion, actualizado, actualizado_por)"
+                     " VALUES ('ultimo_paciente', ?, 'Paciente que se estaba monitoreando', ?, ?)"
+                     " ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor,"
+                     " actualizado=excluded.actualizado", (str(pid or ""), ahora_iso(), "sistema"))
         self.paciente = self.bd.paciente(pid) if pid else None
         asignacion = self.bd.asignacion_de_paciente(pid) if pid else None
         self.dispositivo_esperado = asignacion["id_dispositivo"] if asignacion else None
@@ -1046,6 +1052,19 @@ class Aplicacion(tk.Tk):
             self.aviso(f"Monitoreando a {nombre_completo(self.paciente)} con la pulsera "
                        f"{asignacion['serie']} ({asignacion['id_dispositivo']}).")
 
+    def _retomar_ultimo_paciente(self):
+        """Al abrir, vuelve al paciente que se estaba monitoreando, si sigue ingresado."""
+        guardado = self.bd.config("ultimo_paciente", "")
+        if not guardado:
+            return
+        try:
+            pid = int(guardado)
+        except (TypeError, ValueError):
+            return
+        p = self.bd.paciente(pid)
+        if p and p["estado"] == "Ingresado" and self.bd.asignacion_de_paciente(pid):
+            self.monitorear_paciente(pid)
+
     def refrescar_paciente_monitoreado(self):
         if self.paciente_id:
             self.paciente = self.bd.paciente(self.paciente_id)
@@ -1057,22 +1076,22 @@ class Aplicacion(tk.Tk):
             self.lbl_ficha.configure(text="Modo libre: se muestran los datos de cualquier pulsera, con los "
                                           "umbrales de adulto en reposo.")
             self.lbl_pulsera.configure(text="Sin paciente", bg=GRIS_BG, fg=TEXTO)
-            self.lbl_paciente.configure(text="Dispositivo: --")
+            self.lbl_alergias.configure(text="")
             return
         p = self.paciente
+        alergias = (p["alergias"] or "").strip()
         self.lbl_ficha.configure(
-            text=f"Expediente {p['expediente']} · {texto_edad(p['fecha_nac'])} · {p['sexo'].lower()} · "
-                 f"perfil {p['perfil']} · {p['diagnostico'] or 'sin diagnóstico registrado'}"
-                 + (f" · alergias: {p['alergias']}" if p["alergias"] else ""))
+            text=f"{texto_edad(p['fecha_nac'])} · {p['sexo'].lower()} · perfil {p['perfil']} · "
+                 f"{p['diagnostico'] or 'sin diagnóstico registrado'}", fg=MUTED)
+        self.lbl_alergias.configure(
+            text=f"alergias: {alergias}" if alergias and alergias.lower() != "ninguna conocida" else "")
         a = self.bd.asignacion_de_paciente(p["id"])
         if a:
             bat = "" if a["bateria"] is None else f" · {int(a['bateria'])} %"
             self.lbl_pulsera.configure(text=f"Pulsera {a['serie']} ({a['id_dispositivo']}){bat}",
                                        bg=OK_BG, fg=OK)
-            self.lbl_paciente.configure(text=f"{nombre_completo(p)} · {a['serie']}")
         else:
             self.lbl_pulsera.configure(text="Sin pulsera asignada", bg=WARN_BG, fg=WARN)
-            self.lbl_paciente.configure(text=f"{nombre_completo(p)} · sin pulsera")
 
     def cambiar_pulsera(self):
         if not self.paciente_id:
@@ -1130,52 +1149,91 @@ class Aplicacion(tk.Tk):
             self.signos_manuales_registrados(self.paciente_id, d.resultado)
 
     def signos_manuales_registrados(self, pid, valores):
+        """Evalúa los signos que acaba de registrar enfermería contra el rango del paciente."""
         if pid != self.paciente_id:
             return
         self._pintar_signos_manuales()
-        for signo, valor in valores.items():
-            nivel, direccion = clasificar(signo, valor, self.umbrales)
+        if self.conexion == "conectado":
+            self._actualizar_estado_global()
+        # La presión se juzga completa, no sístole y diástole por separado.
+        if "pas" in valores or "pad" in valores:
+            ult = self.bd.ultimas_mediciones(pid)
+            pas = valores.get("pas") or (ult["pas"]["valor"] if "pas" in ult else None)
+            pad = valores.get("pad") or (ult["pad"]["valor"] if "pad" in ult else None)
+            if pas is not None and pad is not None:
+                n_s, d_s = clasificar("pas", pas, self.umbrales)
+                n_d, d_d = clasificar("pad", pad, self.umbrales)
+                niveles = [n for n in (n_s, n_d) if n is not None]
+                nivel = max(niveles) if niveles else None
+                if nivel is not None and nivel > NIVEL_NORMAL:
+                    partes = []
+                    if n_s and n_s > NIVEL_NORMAL:
+                        partes.append(f"sistólica {d_s}")
+                    if n_d and n_d > NIVEL_NORMAL:
+                        partes.append(f"diastólica {d_d}")
+                    u_s, u_d = self.umbrales["pas"], self.umbrales["pad"]
+                    self._nueva_alerta(
+                        "Presión arterial fuera de rango",
+                        f"{pas:g}/{pad:g} mmHg ({' y '.join(partes)}). Rango normal del paciente: "
+                        f"{u_s['normal'][0]:g} a {u_s['normal'][1]:g} sobre {u_d['normal'][0]:g} a "
+                        f"{u_d['normal'][1]:g} mmHg. Valor tomado a mano.",
+                        "ALTA" if nivel == NIVEL_ALERTA else "MEDIA", "MANUAL", "PA", None,
+                        leve=(nivel == NIVEL_VIGILANCIA))
+        if "fr" in valores:
+            nivel, direccion = clasificar("fr", valores["fr"], self.umbrales)
             if nivel is not None and nivel > NIVEL_NORMAL:
-                nombre, unidad, _ = SIGNOS[signo]
-                u = self.umbrales[signo]
+                u = self.umbrales["fr"]
                 self._nueva_alerta(
-                    f"{nombre} fuera de rango",
-                    f"{valor:g} {unidad} ({direccion}). Rango normal del paciente: "
-                    f"{u['normal'][0]:g} a {u['normal'][1]:g} {unidad}. Valor tomado a mano.",
-                    "ALTA" if nivel == NIVEL_ALERTA else "MEDIA", "MANUAL", signo.upper(), None,
+                    "Frecuencia respiratoria fuera de rango",
+                    f"{valores['fr']:g} rpm ({direccion}). Rango normal del paciente: "
+                    f"{u['normal'][0]:g} a {u['normal'][1]:g} rpm. Valor tomado a mano.",
+                    "ALTA" if nivel == NIVEL_ALERTA else "MEDIA", "MANUAL", "FR", None,
                     leve=(nivel == NIVEL_VIGILANCIA))
 
+    def _actualizar_estado_global(self, dispositivo=None):
+        """El estado del paciente junta lo que mide la pulsera y lo que tomó enfermería."""
+        niveles = dict(self._niveles_vitales)
+        niveles.update(self._nivel_manual)
+        causas = list(self._causas_vitales) + list(self._causas_manual)
+        self._pintar_banner(estado_global(niveles.values()), causas, dispositivo)
+
     def _pintar_signos_manuales(self):
-        if not hasattr(self, "lbl_manual"):
+        """Pinta la presión arterial y la frecuencia respiratoria en sus propias tarjetas."""
+        if not hasattr(self, "tarjetas") or "pa" not in self.tarjetas:
             return
+        self._nivel_manual = {}
+        self._causas_manual = []
         if not self.paciente_id:
-            for val, pie in self.lbl_manual.values():
-                val.configure(text="sin paciente", fg=MUTED)
-                pie.configure(text="")
+            for clave in ("pa", "fr"):
+                self.tarjetas[clave].actualizar(None, None, "Sin datos")
+                self.tarjetas[clave].fijar_pie("la toma enfermería")
             return
         ult = self.bd.ultimas_mediciones(self.paciente_id)
         pas, pad = ult.get("pas"), ult.get("pad")
-        val, pie = self.lbl_manual["pa"]
         if pas and pad:
-            n_s = clasificar("pas", pas["valor"], self.umbrales)[0]
-            n_d = clasificar("pad", pad["valor"], self.umbrales)[0]
-            peor = max(x for x in (n_s, n_d) if x is not None)
-            fuerte, _ = COLOR_NIVEL.get(peor, COLOR_NIVEL[None])
-            val.configure(text=f"{pas['valor']:g}/{pad['valor']:g}", fg=fuerte)
-            pie.configure(text=f"{pas['hora'][11:16]} · {pas['tomado_por'] or ''}")
+            niveles = [n for n in (clasificar("pas", pas["valor"], self.umbrales)[0],
+                                   clasificar("pad", pad["valor"], self.umbrales)[0]) if n is not None]
+            nivel = max(niveles) if niveles else None
+            self.tarjetas["pa"].actualizar(f"{pas['valor']:g}/{pad['valor']:g}", nivel,
+                                           NOMBRE_NIVEL.get(nivel, "Registrada"))
+            self.tarjetas["pa"].fijar_pie(f"{pas['hora'][11:16]} · {pas['tomado_por'] or 'sin registrar'}")
+            if nivel is not None and nivel > NIVEL_NORMAL:
+                self._nivel_manual["pa"] = nivel
+                self._causas_manual.append(f"Presión arterial {pas['valor']:g}/{pad['valor']:g} mmHg")
         else:
-            val.configure(text="sin registrar", fg=MUTED)
-            pie.configure(text="no la mide la pulsera")
+            self.tarjetas["pa"].actualizar(None, None, "Sin tomar")
+            self.tarjetas["pa"].fijar_pie("pulse aquí para registrarla")
         fr = ult.get("fr")
-        val, pie = self.lbl_manual["fr"]
         if fr:
             nivel = clasificar("fr", fr["valor"], self.umbrales)[0]
-            fuerte, _ = COLOR_NIVEL.get(nivel, COLOR_NIVEL[None])
-            val.configure(text=f"{fr['valor']:g} rpm", fg=fuerte)
-            pie.configure(text=f"{fr['hora'][11:16]} · {fr['tomado_por'] or ''}")
+            self.tarjetas["fr"].actualizar(f"{fr['valor']:g}", nivel, NOMBRE_NIVEL.get(nivel, "Registrada"))
+            self.tarjetas["fr"].fijar_pie(f"{fr['hora'][11:16]} · {fr['tomado_por'] or 'sin registrar'}")
+            if nivel is not None and nivel > NIVEL_NORMAL:
+                self._nivel_manual["fr"] = nivel
+                self._causas_manual.append(f"Frecuencia respiratoria {fr['valor']:g} rpm")
         else:
-            val.configure(text="sin registrar", fg=MUTED)
-            pie.configure(text="la toma enfermería")
+            self.tarjetas["fr"].actualizar(None, None, "Sin tomar")
+            self.tarjetas["fr"].fijar_pie("pulse aquí para registrarla")
 
     # ---- avisos y evidencias ---------------------------------------------
 
@@ -1332,10 +1390,20 @@ class Aplicacion(tk.Tk):
         self.sesion_bd = self.bd.abrir_sesion(self.paciente_id,
                                               asignacion["pulsera_id"] if asignacion else None,
                                               fuente, self.registrador.marca)
+        # Las alertas ya cerradas se quedan con la sesión anterior. Las que siguen sin atender
+        # no desaparecen porque se reinicie el monitoreo: se arrastran y se vuelven a anotar en
+        # la bitácora de la sesión nueva, porque un pendiente clínico no se pierde solo.
+        arrastradas = 0
         for t in list(self.tarjetas_alerta):
+            if t.requiere_atencion and not t.atendida:
+                arrastradas += 1
+                self.registrador.registrar_alerta("GENERADA", t.origen, t.tipo,
+                                                  f"{t.detalle} (pendiente de la sesión anterior)", t.seq)
+                continue
             t.destroy()
-        self.tarjetas_alerta.clear()
-        self._critico_activo = {k: False for k in self._critico_activo}
+            self.tarjetas_alerta.remove(t)
+        if not arrastradas:
+            self._critico_activo = {k: False for k in self._critico_activo}
         self._huecos = {}
         self._ultimo_estado = None
         self._t_ultimo_paquete = None
@@ -1355,6 +1423,9 @@ class Aplicacion(tk.Tk):
                      f"· esperando paquetes del emisor")
         self._estado_demo()
         self._refrescar_vacio()
+        self._actualizar_titulo_alertas()
+        if arrastradas:
+            self.aviso(f"{arrastradas} alerta(s) sin atender siguen abiertas de la sesión anterior.")
         self._redibujar()
 
     def _detener(self):
@@ -1476,8 +1547,9 @@ class Aplicacion(tk.Tk):
             self.tarjetas["batt"].fijar_pie(pie)
             self._evaluar_bateria(bateria, autonomia, p.get("seq"))
 
-        global_nivel = estado_global(niveles.values())
-        self._pintar_banner(global_nivel, causas, p.get("id"))
+        self._niveles_vitales = dict(niveles)
+        self._causas_vitales = list(causas)
+        self._actualizar_estado_global(p.get("id"))
         self._redibujar()
         self._actualizar_enlace()
 
@@ -1599,6 +1671,7 @@ class Aplicacion(tk.Tk):
         else:
             tarjeta.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
         self.tarjetas_alerta.insert(0, tarjeta)
+        self.after(60, lambda: self.canvas_alertas.yview_moveto(0))
         self.update_idletasks()
         self.canvas_alertas.yview_moveto(0)
         # Si hay demasiadas, se retiran primero las ya atendidas o las avisos del sistema;
@@ -1679,19 +1752,18 @@ class Aplicacion(tk.Tk):
             detalle = "  ·  ".join(causas)
         else:
             detalle = "Esperando lecturas válidas"
-        for w in (self.banner, self.lbl_estado, self.lbl_causas, self.lbl_paciente, self.lbl_integridad):
+        for w in (self.banner, self.lbl_estado, self.lbl_causas, self.lbl_integridad):
             w.config(bg=suave)
         self.banner_barra.config(bg=fuerte)
         self.lbl_estado.config(text=f"PACIENTE {texto}" if nivel is not None else texto, fg=fuerte)
         self.lbl_causas.config(text=detalle, fg=TEXTO if nivel else MUTED)
-        self.lbl_paciente.config(text=f"Dispositivo: {dispositivo or '--'}")
         self._ultimo_estado = nivel
 
     def _banner_obsoleto(self, titulo, sin_senal=False):
         """El estado del paciente deja de ser en vivo: se muestra como último dato conocido."""
         fuerte, suave = (WARN, WARN_BG) if sin_senal else (GRIS, GRIS_BG)
         ultimo = ESTADO_PACIENTE.get(self._ultimo_estado)
-        for w in (self.banner, self.lbl_estado, self.lbl_causas, self.lbl_paciente, self.lbl_integridad):
+        for w in (self.banner, self.lbl_estado, self.lbl_causas, self.lbl_integridad):
             w.config(bg=suave)
         self.banner_barra.config(bg=fuerte)
         self.lbl_estado.config(text=titulo, fg=fuerte)
@@ -1703,9 +1775,16 @@ class Aplicacion(tk.Tk):
         self.lbl_causas.config(text="Conectando con la fuente de datos…")
 
     def _refrescar_vacio(self):
-        for clave, tarjeta in self.tarjetas.items():
-            tarjeta.actualizar(None, None, "Sin datos")
-        self.lbl_sin_alertas.pack(pady=18, before=self.canvas_alertas.master)
+        """
+        Deja en blanco lo que mide la pulsera, a la espera del primer paquete.
+        Los signos tomados a mano no se borran: los registró el personal y siguen
+        siendo el último valor conocido del paciente.
+        """
+        for clave in ("hr", "spo2", "temp", "batt"):
+            self.tarjetas[clave].actualizar(None, None, "Sin datos")
+        self._pintar_signos_manuales()
+        if not self.tarjetas_alerta:
+            self.lbl_sin_alertas.pack(pady=18, before=self.canvas_alertas.master)
 
     def _actualizar_titulo_alertas(self):
         pendientes = sum(1 for t in self.tarjetas_alerta if t.requiere_atencion and not t.atendida)
