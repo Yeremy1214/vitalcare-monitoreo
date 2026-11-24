@@ -6,6 +6,13 @@ cada paciente y qué hizo el personal con cada alerta.
 
 Es el programa que se presenta a la asesora y al jurado en la etapa de Anteproyecto.
 
+La estación existe en dos versiones que hacen lo mismo y usan la misma base de datos:
+
+| Versión | Dónde | Cómo se abre |
+|---|---|---|
+| **Escritorio** | esta carpeta (Python) | `python app_testbed.py` |
+| **Web** | carpeta [`web/`](web/) | https://vitalcare-pulsera.vercel.app en Chrome o Edge, sin instalar nada ([web/README.md](web/README.md)) |
+
 ## Qué se necesita
 
 - Python 3.10 o superior, con Tkinter (viene incluido en el instalador de python.org para Windows).
@@ -16,6 +23,7 @@ pip install matplotlib
 ```
 
 - Solo el día que se use Bluetooth con la pulsera real: `pip install bleak`
+- Solo para recibir la pulsera a través del hub (fuente *Hub (MQTT)*): `pip install paho-mqtt`
 
 La base de datos es SQLite y viene incluida con Python, así que no hay nada más que instalar.
 
@@ -32,7 +40,7 @@ vivo sin hardware. Para comprobar que todo funciona en tu PC:
 python pruebas_testbed.py
 ```
 
-Debe terminar con `32 de 32 pruebas correctas`.
+Debe terminar con `33 de 33 pruebas correctas`.
 
 ## Las cuatro pestañas
 
@@ -41,7 +49,7 @@ Debe terminar con `32 de 32 pruebas correctas`.
 | **Monitoreo** | Los seis signos en tarjetas, las tendencias, las alertas en vivo y el estado del enlace, con el paciente y su pulsera en la cabecera |
 | **Pacientes** | Ingreso, edición, asignación y cambio de pulsera, signos tomados a mano, alta y eliminación |
 | **Pulseras** | Inventario por número de serie, con su estado, su batería y a quién está asignada |
-| **Configuración** | Umbrales clínicos por perfil, parámetros de alerta del centro y auditoría |
+| **Configuración** | Umbrales clínicos por perfil, parámetros de alerta del centro (incluida la conexión con el hub) y auditoría |
 
 ## Ingreso del paciente y asignación de pulsera
 
@@ -117,8 +125,11 @@ Una radio no puede garantizar por sí sola que nada se pierda, así que el siste
    que el personal debe documentar.
 4. **Guarda en disco** cada fila en el momento en que llega, con `fsync`.
 
-Hoy el reenvío funciona con el simulador. Con la pulsera real, el firmware debe guardar un historial
-por número de secuencia y aceptar un comando "reenviar desde el seq N".
+El reenvío funciona con el simulador y con el hub de prueba (`emisor_mqtt_prueba.py`). Con la
+pulsera real, la estación ya manda la orden `{"cmd":"resend","seq":[...]}` por el hub; falta que el
+firmware guarde el historial por número de secuencia y la atienda (ver
+[docs/contrato_pulsera.md](docs/contrato_pulsera.md)). Mientras tanto, lo que no llega se declara
+como pérdida real a los 12 s.
 
 ## Escenarios críticos: corte de red y corte de energía
 
@@ -147,7 +158,7 @@ El botón **Evidencia (F8)**, en la barra de abajo, guarda una captura de la ven
 `datos_sesion/evidencias/`, y la deja anotada en la auditoría. Sirve para los anexos del informe
 final sin tener que recortar pantallazos a mano.
 
-## Las tres fuentes de datos
+## Las cuatro fuentes de datos
 
 1. **Simulador**: no necesita nada. Escenarios: paciente estable, fiebre, SpO₂ baja, taquicardia,
    bradicardia, señal inestable (pierde y recupera), señal inestable sin reenvío (pérdida real) y
@@ -157,6 +168,16 @@ final sin tener que recortar pantallazos a mano.
    `3e9ad104-fdf4-4e20-a4f1-e5d67040c7a6`, eventos `72058786-0707-460c-9eda-342769fe84b6`.
 3. **WiFi / UDP**: escucha en un puerto (por defecto `5005`) y acepta el mismo JSON. Para probar sin
    pulsera está `emisor_udp_prueba.py`.
+4. **Hub (MQTT)**: la pulsera le manda los datos al hub por Bluetooth y el hub los publica en el
+   broker MQTT (`broker.hivemq.com`, prefijo `pucmm-pulsera-7f3a`). La estación se suscribe, pide el
+   reenvío de lo que falte y, al atender una caída o un SOS, le avisa a la pulsera "ayuda en camino".
+   Es la misma ruta que usa la versión web, así que las dos pueden mirar a la misma pulsera a la vez.
+   Los datos del broker se cambian en Configuración → Parámetros de alerta (`mqtt_*`). Para probar
+   sin el hub está `emisor_mqtt_prueba.py`. Los tópicos están en
+   [docs/contrato_pulsera.md](docs/contrato_pulsera.md).
+
+Una pulsera acepta una sola conexión Bluetooth a la vez: o la tiene el hub, o la tiene una PC con la
+fuente Bluetooth. Para usar el hub, la fuente Bluetooth de la PC tiene que estar desconectada.
 
 ## Archivos que se guardan
 
@@ -182,11 +203,13 @@ en `vitalcare.db`, junto al programa.
 | `pantallas.py` | Pestañas de pacientes, pulseras y configuración, con sus formularios |
 | `datos.py` | Base de datos: pacientes, pulseras, asignaciones, umbrales, auditoría |
 | `logica.py` | Clasificación de signos, conteo de paquetes perdidos y resumen (sin interfaz) |
-| `transportes.py` | Simulador, BLE y UDP; todos entregan el mismo formato |
+| `transportes.py` | Simulador, BLE, UDP y hub por MQTT; todos entregan el mismo formato |
 | `registro.py` | Escritura de los CSV de la sesión |
 | `estilo.py` | Colores y piezas de interfaz compartidas |
 | `emisor_udp_prueba.py` | Emisor de prueba para la fuente WiFi/UDP |
-| `pruebas_testbed.py` | 32 pruebas automáticas |
+| `emisor_mqtt_prueba.py` | Hub de prueba: publica una pulsera simulada por MQTT (sirve para la web y para el escritorio) |
+| `pruebas_testbed.py` | 33 pruebas automáticas |
+| `web/` | La versión web de la estación: misma lógica, mismas pantallas, misma base de datos |
 
 ## Atajos
 
@@ -203,6 +226,8 @@ en `vitalcare.db`, junto al programa.
 - Los umbrales de referencia son valores para población general y se ajustan desde Configuración
   según el criterio clínico del centro. El programa no emite diagnósticos.
 - La temperatura llega con el ajuste de +2.1 °C aplicado por el firmware.
+- El mismo archivo `vitalcare.db` sirve en las dos versiones: la web lo exporta y lo importa desde
+  Configuración → Datos del navegador. Para copiarlo desde el escritorio, cerrar antes el programa.
 - Esta estación monitorea a un paciente a la vez. La vista de todas las camas a la vez corresponde
   al panel web del Proyecto de Grado.
 - La ventana está pensada para pantallas de 1366×768 o mayores.

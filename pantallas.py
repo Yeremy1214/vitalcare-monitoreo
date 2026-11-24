@@ -819,7 +819,8 @@ class PantallaConfig(tk.Frame):
         f = tk.Frame(c, bg=CARD)
         f.pack(fill=tk.X, padx=14, pady=(0, 14))
         boton(f, "Cambiar parámetro", self._editar_param, self.fam).pack(side=tk.LEFT)
-        tk.Label(f, text="Los cambios se aplican de inmediato al monitoreo en curso.",
+        tk.Label(f, text="Los cambios se aplican de inmediato al monitoreo en curso. Los parámetros mqtt_ son los "
+                         "de la conexión con el hub.",
                  bg=CARD, fg=MUTED, font=(self.fam, 9)).pack(side=tk.LEFT, padx=12)
 
     def _cargar_parametros(self):
@@ -827,7 +828,11 @@ class PantallaConfig(tk.Frame):
         self.claves = []
         for i, f in enumerate(self.bd.listar_config()):
             self.claves.append(f["clave"])
-            self.tabla_p.agregar(i, (f["clave"], f"{f['valor']} {f['unidad'] or ''}".strip(),
+            if f["unidad"] == "clave":
+                valor = "••••••" if f["valor"] else "(vacía)"
+            else:
+                valor = f"{f['valor']} {'' if f['unidad'] == 'puerto' else (f['unidad'] or '')}".strip()
+            self.tabla_p.agregar(i, (f["clave"], valor,
                                      f["descripcion"], f"{(f['actualizado'] or '')[:16]} · "
                                                        f"{f['actualizado_por'] or ''}"))
 
@@ -842,14 +847,17 @@ class PantallaConfig(tk.Frame):
         d.subtitulo(f["descripcion"] or "")
         g = tk.Frame(d.cuerpo, bg=BG)
         g.pack(fill=tk.BOTH, expand=True)
-        v_val, _ = fila_campo(g, self.fam, f"Valor ({f['unidad'] or 'texto'})", 0, 18, f["valor"])
+        unidad = "texto" if f["unidad"] in (None, "", "clave") else f["unidad"]
+        v_val, w_val = fila_campo(g, self.fam, f"Valor ({unidad})", 0, 18, f["valor"])
+        if f["unidad"] == "clave":
+            w_val.configure(show="•")
         v_quien, _ = fila_campo(g, self.fam, "Autorizado por *", 1, 24, self.app.usuario)
 
         def guardar():
             if len(v_quien.get().strip()) < 3:
                 return d.error("Escriba quién autoriza el cambio.")
             valor = v_val.get().strip()
-            if f["unidad"] in ("s", "%", "min"):
+            if f["unidad"] in ("s", "%", "min", "puerto"):
                 try:
                     n = float(valor)
                 except ValueError:
@@ -868,7 +876,7 @@ class PantallaConfig(tk.Frame):
         if d.resultado is not None:
             self._cargar_parametros()
             self.app.aplicar_configuracion()
-            self.app.aviso(f"Parámetro {clave} actualizado a {d.resultado}.")
+            self.app.aviso(f"Parámetro {clave} actualizado" + ("." if f["unidad"] == "clave" else f" a {d.resultado}."))
 
     # ---- auditoría ----
     def _construir_auditoria(self):

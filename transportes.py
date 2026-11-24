@@ -2,14 +2,16 @@
 Capa de transporte del testbed.
 
 Esta capa separa "de dónde vienen los paquetes" de "qué hace el programa con ellos".
-El testbed puede recibir los paquetes de tres fuentes, que se eligen desde la ventana:
+El testbed puede recibir los paquetes de cuatro fuentes, que se eligen desde la ventana:
 
   - SimuladorTransport: genera paquetes localmente, sin hardware (con escenarios y
                         botones para disparar caída / SOS en la demostración).
   - BLETransport:       se conecta por Bluetooth Low Energy a la pulsera real (bleak).
   - UDPTransport:       escucha datagramas JSON por WiFi (la ruta del receptor UDP).
+  - MQTTTransport:      recibe la pulsera real a través del hub y el broker MQTT (paho-mqtt),
+                        igual que la versión web.
 
-Las tres entregan el mismo formato, acordado en Definicion_Formato_JSON_Bluetooth.docx:
+Las cuatro entregan el mismo formato, acordado en Definicion_Formato_JSON_Bluetooth.docx:
   Telemetry (cada 2 s):
     {"id":"W01","seq":145,"ts":123456,"hr":78,"spo2":97,"temp":36.8,"batt":82,"st":"OK"}
   Event (inmediato):
@@ -406,3 +408,175 @@ class BLETransport(Transporte):
         # Mantener la tarea viva mientras el cliente siga conectado.
         while self._cliente.is_connected and not self._detenido:
             await asyncio.sleep(1.0)
+
+
+# ----------------------------------------------------------------------
+# Hub por MQTT (la misma ruta que usa la versión web)
+# ----------------------------------------------------------------------
+
+
+def topicos_mqtt(prefijo):
+    """Tópicos que publica el hub (FIRMWARE/hub)."""
+    return [f"{prefijo}/pulsera/+/telemetria", f"{prefijo}/pulsera/+/evento",
+            f"{prefijo}/hub/+/estado", f"{prefijo}/hub/+/info"]
+
+
+class MQTTTransport(Transporte):
+    """
+    Recibe la pulsera real a través del hub: pulsera -> BLE -> hub (ESP32-S3) -> WiFi ->
+    broker MQTT -> esta PC. Así la pulsera no tiene que estar conectada por Bluetooth a la
+    computadora de la estación, y la web y el programa de escritorio pueden mirar al mismo
+    hub a la vez. Requiere `pip install paho-mqtt`.
+
+    Tópicos:
+      <prefijo>/pulsera/<id>/telemetria   JSON de telemetría
+      <prefijo>/pulsera/<id>/evento       JSON de evento (FALL, SOS)
+      <prefijo>/hub/<hub>/estado          "online" / "offline" (retenido)
+      <prefijo>/hub/<hub>/info            {"pulsera":"conectada","pendientes":N}
+      <prefijo>/pulsera/<id>/comando      lo que manda la estación: {"cmd":"ack",...} o {"cmd":"resend","seq":[...]}
+
+    Pedir el reenvío no cuesta nada: si el firmware todavía no lo atiende, el paquete se
+    declara perdido a los 12 s, como con cualquier otra fuente.
+    """
+
+    soporta_reenvio = True
+    MAX_REENVIO_POR_CICLO = 120
+
+    def __init__(self, broker="broker.hivemq.com", puerto=1883, prefijo="pucmm-pulsera-7f3a",
+                 usuario="", clave="", al_hub=None):
+        self.broker, self.puerto, self.prefijo = broker, int(puerto), prefijo
+        self.usuario, self.clave = usuario, clave
+        self.al_hub = al_hub
+        self.id_destino = None  # la pulsera del paciente en monitoreo
+        self.ultimo_id = None
+        self._cliente = None
+        self._detenido = False
+        self._fin = None
+        self._loop = None
+
+    @staticmethod
+    def _importar_paho():
+        try:
+            import paho.mqtt.client  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError("Falta instalar paho-mqtt para usar el hub. Ejecuta: pip install paho-mqtt") from exc
+
+    def _avisar_hub(self, info):
+        if self.al_hub:
+            try:
+                self.al_hub(info)
+            except Exception:  # noqa: BLE001 - un aviso nunca debe cortar la recepción
+                pass
+
+    async def recibir_paquetes(self, on_telemetry, on_event):
+        self._importar_paho()
+        import paho.mqtt.client as mqtt
+
+        if self._detenido:
+            return
+        self._loop = asyncio.get_running_loop()
+        self._fin = self._loop.create_future()
+        conectado = self._loop.create_future()
+        loop = self._loop
+
+        def en_loop(fn, *a):
+            loop.call_soon_threadsafe(fn, *a)
+
+        def al_conectar(cliente, _u, _f, rc, *_):
+            codigo = getattr(rc, "value", rc)
+            if codigo == 0:
+                cliente.subscribe([(t, 1) for t in topicos_mqtt(self.prefijo)])
+                self._avisar_hub({"tipo": "broker", "texto": "conectado"})
+                en_loop(lambda: conectado.done() or conectado.set_result(True))
+            else:
+                en_loop(lambda: conectado.done() or conectado.set_exception(
+                    RuntimeError(f"El broker rechazó la conexión (código {rc}). Revise usuario y clave.")))
+
+        def al_desconectar(_c, _u, *_a):
+            self._avisar_hub({"tipo": "broker", "texto": "sin conexión" if not self._detenido else "desconectado"})
+
+        def al_mensaje(_c, _u, msg):
+            tema = msg.topic
+            partes = tema.split("/")
+            if tema.endswith("/estado"):
+                texto = msg.payload.decode("utf-8", "replace").strip()
+                self._avisar_hub({"tipo": "estado", "hub": partes[-2], "texto": texto})
+                return
+            if tema.endswith("/info"):
+                try:
+                    datos = json.loads(msg.payload.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    return
+                self._avisar_hub({"tipo": "info", "hub": partes[-2], "datos": datos})
+                return
+
+            def tel(p):
+                self.ultimo_id = p.get("id") or self.ultimo_id
+                on_telemetry(p)
+
+            def ev(p):
+                self.ultimo_id = p.get("id") or self.ultimo_id
+                on_event(p)
+
+            despachar_json(msg.payload, tel, ev)
+
+        ident = f"vitalcare-escritorio-{random.randint(0, 0xFFFFFF):06x}"
+        # 1883 y 8883 son MQTT normal (8883 con cifrado); 8884, 443, 8000, 8080 y 9001 son por WebSocket.
+        via = "websockets" if self.puerto in (8884, 443, 8000, 8080, 9001) else "tcp"
+        try:
+            cliente = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=ident, transport=via)
+        except AttributeError:  # paho-mqtt 1.x
+            cliente = mqtt.Client(client_id=ident, transport=via)
+        if via == "websockets":
+            cliente.ws_set_options(path="/mqtt")
+        if self.puerto in (8883, 8884, 443):
+            cliente.tls_set()
+        if self.usuario:
+            cliente.username_pw_set(self.usuario, self.clave)
+        cliente.on_connect = al_conectar
+        cliente.on_disconnect = al_desconectar
+        cliente.on_message = al_mensaje
+        cliente.reconnect_delay_set(1, 5)
+        self._cliente = cliente
+        try:
+            cliente.connect_async(self.broker, self.puerto, keepalive=30)
+            cliente.loop_start()
+            await asyncio.wait_for(conectado, timeout=15)
+        except asyncio.TimeoutError:
+            self._cerrar_cliente()
+            raise RuntimeError(f"No se pudo conectar al broker {self.broker}:{self.puerto}. Revise la conexión a "
+                               "internet y los datos del broker en Configuración.") from None
+        except Exception:
+            self._cerrar_cliente()
+            raise
+        await self._fin
+
+    def _cerrar_cliente(self):
+        c, self._cliente = self._cliente, None
+        if c is not None:
+            try:
+                c.loop_stop()
+                c.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def enviar_comando(self, id_pulsera, comando):
+        """Publica una orden para la pulsera (el hub se la pasa por Bluetooth). True si salió."""
+        c = self._cliente
+        if c is None or not id_pulsera or not c.is_connected():
+            return False
+        info = c.publish(f"{self.prefijo}/pulsera/{id_pulsera}/comando", json.dumps(comando), qos=1)
+        return info.rc == 0
+
+    def solicitar_reenvio(self, seqs):
+        ident = self.id_destino or self.ultimo_id
+        lista = [int(s) for s in seqs][: self.MAX_REENVIO_POR_CICLO]
+        for i in range(0, len(lista), 20):  # en tandas: el hub y la pulsera tienen poca memoria por orden
+            self.enviar_comando(ident, {"cmd": "resend", "seq": lista[i:i + 20]})
+        return True
+
+    async def desconectar(self):
+        self._detenido = True
+        self._cerrar_cliente()
+        if self._fin is not None and not self._fin.done():
+            self._fin.set_result(None)

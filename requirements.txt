@@ -3,3 +3,6 @@ matplotlib>=3.7
 
 # Solo hace falta el día que se use la fuente Bluetooth con la pulsera real:
 # bleak>=0.21
+
+# Solo hace falta para la fuente Hub (MQTT) y para emisor_mqtt_prueba.py:
+# paho-mqtt>=2.0

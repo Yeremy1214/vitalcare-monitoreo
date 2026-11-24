@@ -4,7 +4,8 @@ Sistema Inteligente de Monitoreo de Signos Vitales y Gestión de Emergencias Hos
 
 Qué hace:
   - Recibe paquetes de telemetría (hr, spo2, temp, batt) y de eventos (FALL, SOS)
-    desde tres fuentes que se eligen en la ventana: Simulador, Bluetooth (BLE) o WiFi/UDP.
+    desde cuatro fuentes que se eligen en la ventana: Simulador, Bluetooth (BLE), WiFi/UDP
+    o Hub (MQTT), que es la misma ruta que usa la versión web.
   - Muestra cada signo vital en una tarjeta con su estado (Normal / Vigilancia / Alerta)
     y un banner con el estado general del paciente.
   - Grafica las tendencias en vivo con el rango normal sombreado y marca los eventos.
@@ -18,7 +19,7 @@ Cómo correrlo:
     pip install matplotlib
     python app_testbed.py
 (bleak solo hace falta el día que se use la fuente Bluetooth con la pulsera real:
- pip install bleak)
+ pip install bleak; paho-mqtt solo para la fuente Hub (MQTT): pip install paho-mqtt)
 
 Atajos: F2 simula caída, F3 simula SOS (solo simulador), F11 pantalla completa, Esc sale.
 """
@@ -69,7 +70,7 @@ from logica import (
     titulo_alerta,
 )
 from registro import CARPETA_DATOS, RegistradorCSV
-from transportes import ESCENARIOS, BLETransport, SimuladorTransport, UDPTransport
+from transportes import ESCENARIOS, BLETransport, MQTTTransport, SimuladorTransport, UDPTransport
 from datos import ARCHIVO_BD, SIGNOS, SIGNOS_MANUALES, BaseDatos, ahora as ahora_iso, texto_edad
 from estilo import estilos_ttk
 from pantallas import (DialogoAsignar, DialogoMedicion, PantallaConfig, PantallaPacientes,
@@ -82,7 +83,8 @@ from pantallas import (DialogoAsignar, DialogoMedicion, PantallaConfig, Pantalla
 FUENTE_SIM = "Simulador"
 FUENTE_BLE = "Bluetooth (BLE)"
 FUENTE_UDP = "WiFi / UDP"
-FUENTES = [FUENTE_SIM, FUENTE_BLE, FUENTE_UDP]
+FUENTE_MQTT = "Hub (MQTT)"
+FUENTES = [FUENTE_SIM, FUENTE_BLE, FUENTE_UDP, FUENTE_MQTT]
 
 ESCALAMIENTO_S = 60  # una alerta sin atender tras este tiempo se marca como escalada
 SIN_SENAL_S = 7.0  # sin paquetes por más de esto => "Sin señal" (telemetría llega cada 2 s)
@@ -210,9 +212,11 @@ class TarjetaVital(tk.Frame):
 
         fila = tk.Frame(cuerpo, bg=CARD)
         fila.pack(fill=tk.X)
-        tk.Label(fila, text=titulo, bg=CARD, fg=MUTED, font=(fam, 10, "bold")).pack(side=tk.LEFT)
-        self.chip = tk.Label(fila, text="Sin datos", font=(fam, 9, "bold"), padx=8, pady=1)
+        # El estado se empaqueta primero para que nunca se recorte; si falta espacio se acorta el título.
+        self.chip = tk.Label(fila, text="Sin datos", font=(fam, 9, "bold"), padx=6, pady=1)
         self.chip.pack(side=tk.RIGHT)
+        tk.Label(fila, text=titulo, bg=CARD, fg=MUTED, font=(fam, 9, "bold"), anchor="w").pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
 
         fila_valor = tk.Frame(cuerpo, bg=CARD)
         fila_valor.pack(fill=tk.X, pady=(4, 0))
@@ -844,7 +848,6 @@ class Aplicacion(tk.Tk):
         # Alertas
         self.panel_alertas = self._panel(lateral, "Alertas")
         self.lbl_titulo_alertas = self.panel_alertas.winfo_children()[0]
-        self.panel_alertas.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(10, 0))
         self.lbl_sin_alertas = tk.Label(self.panel_alertas, text="Sin alertas por ahora", bg=CARD,
                                         fg=MUTED, font=(self.fam, 10))
         self.lbl_sin_alertas.pack(pady=18)
@@ -870,7 +873,9 @@ class Aplicacion(tk.Tk):
 
         # Enlace: tres cifras y una línea de detalle, para dejarle sitio a las alertas
         enlace = self._panel(lateral, "Enlace con la pulsera")
+        # Se empaqueta antes que las alertas para que nunca quede cortado abajo.
         enlace.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+        self.panel_alertas.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(10, 0))
         self.lbl_enlace = {}
         cuadro = tk.Frame(enlace, bg=CARD)
         cuadro.pack(fill=tk.X, padx=14)
@@ -896,6 +901,10 @@ class Aplicacion(tk.Tk):
             lbl = tk.Label(detalle, text="--", bg=CARD, fg=TEXTO, font=(self.fam, 9, "bold"))
             lbl.pack(side=tk.LEFT, padx=(3, 0))
             self.lbl_enlace[clave] = lbl
+        # Solo con la fuente Hub (MQTT): estado del broker y del hub
+        self.lbl_hub = tk.Label(enlace, text="", bg=CARD, fg=OK, font=(self.fam, 9, "bold"), anchor="w",
+                                justify="left", wraplength=370)
+        self._hub = {}
 
     def _panel(self, master, titulo):
         p = tk.Frame(master, bg=CARD, highlightthickness=1, highlightbackground=BORDE, highlightcolor=BORDE)
@@ -910,10 +919,9 @@ class Aplicacion(tk.Tk):
         # Fila de archivos y utilidades
         fila_arch = tk.Frame(pie, bg=BG)
         fila_arch.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+        # Los botones se empaquetan antes que los textos: un aviso largo no debe tapar ningún botón.
         self.lbl_csv = tk.Label(fila_arch, text="Datos: sin sesión activa", bg=BG, fg=MUTED, font=(self.fam, 9))
-        self.lbl_csv.pack(side=tk.LEFT)
         self.lbl_aviso = tk.Label(fila_arch, text="", bg=BG, fg=PRIMARIO, font=(self.fam, 9, "bold"))
-        self.lbl_aviso.pack(side=tk.LEFT, padx=(16, 0))
         self._boton(fila_arch, "Pantalla completa (F11)", self._alternar_pantalla_completa, color=GRIS_BG,
                     fg=TEXTO, activo="#D3DAE1").pack(side=tk.RIGHT, padx=(8, 0))
         self._boton(fila_arch, "Abrir carpeta de datos", self._abrir_carpeta, color=GRIS_BG, fg=TEXTO,
@@ -923,6 +931,8 @@ class Aplicacion(tk.Tk):
         self._boton(fila_arch, "Resumen de sesión", self._mostrar_resumen).pack(side=tk.RIGHT, padx=(8, 0))
         tk.Checkbutton(fila_arch, text="Sonido de alerta", variable=self.var_sonido, bg=BG, fg=TEXTO,
                        activebackground=BG, font=(self.fam, 9), selectcolor="white").pack(side=tk.RIGHT, padx=(8, 0))
+        self.lbl_csv.pack(side=tk.LEFT)
+        self.lbl_aviso.pack(side=tk.LEFT, padx=(16, 0))
 
         # Barra de demostración (solo activa con el simulador)
         self.panel_demo = tk.Frame(pie, bg=CARD, highlightthickness=1, highlightbackground=BORDE, highlightcolor=BORDE)
@@ -969,6 +979,11 @@ class Aplicacion(tk.Tk):
             "plazo_recuperacion_s": c.config("plazo_recuperacion_s", PLAZO_RECUPERACION_S),
             "reintento_s": c.config("reintento_s", REINTENTO_S),
             "centro": c.config("centro", "Centro de salud"),
+            "mqtt_broker": str(c.config("mqtt_broker", "broker.hivemq.com")),
+            "mqtt_puerto": c.config("mqtt_puerto", 1883),
+            "mqtt_prefijo": str(c.config("mqtt_prefijo", "pucmm-pulsera-7f3a")),
+            "mqtt_usuario": str(c.config("mqtt_usuario", "") or ""),
+            "mqtt_clave": str(c.config("mqtt_clave", "") or ""),
         }
 
     def aplicar_configuracion(self):
@@ -976,6 +991,10 @@ class Aplicacion(tk.Tk):
         self._cargar_config()
         self.tarjetas["batt"].fijar_pie(f"Aviso a menos de {self.cfg['bateria_baja']:g} %")
         self.refrescar_umbrales()
+        if self.var_fuente.get() == FUENTE_MQTT and self.hilo is None:
+            self.var_param.set(self.cfg["mqtt_prefijo"])
+        if self.hilo is not None and self.fuente_actual == FUENTE_MQTT:
+            self.aviso("Detenga y vuelva a conectar para usar los datos nuevos del broker.")
 
     def refrescar_umbrales(self):
         """Arma los umbrales del paciente que se está monitoreando."""
@@ -1035,13 +1054,12 @@ class Aplicacion(tk.Tk):
     def monitorear_paciente(self, pid):
         """Deja la pantalla de monitoreo apuntando a este paciente y su pulsera."""
         self.paciente_id = pid
-        self.bd.ejec("INSERT INTO config (clave, valor, descripcion, actualizado, actualizado_por)"
-                     " VALUES ('ultimo_paciente', ?, 'Paciente que se estaba monitoreando', ?, ?)"
-                     " ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor,"
-                     " actualizado=excluded.actualizado", (str(pid or ""), ahora_iso(), "sistema"))
+        self.bd.fijar_interno("ultimo_paciente", pid or "", "Paciente que se estaba monitoreando")
         self.paciente = self.bd.paciente(pid) if pid else None
         asignacion = self.bd.asignacion_de_paciente(pid) if pid else None
         self.dispositivo_esperado = asignacion["id_dispositivo"] if asignacion else None
+        if isinstance(self.transporte, MQTTTransport):
+            self.transporte.id_destino = self.dispositivo_esperado
         self._ajenos = {}
         self.refrescar_umbrales()
         self._refrescar_combo_pacientes()
@@ -1117,6 +1135,8 @@ class Aplicacion(tk.Tk):
             self._refrescar_combo_pacientes()
             return
         self.dispositivo_esperado = info["dispositivo"]
+        if isinstance(self.transporte, MQTTTransport):
+            self.transporte.id_destino = info["dispositivo"]
         self._ajenos = {}
         self.sesion.seq.reiniciar_secuencia()
         self._huecos = {}
@@ -1333,9 +1353,15 @@ class Aplicacion(tk.Tk):
             if fuente == FUENTE_BLE:
                 self.lbl_param.config(text="Nombre o MAC")
                 self.var_param.set("W01")
+                self.entrada_param.config(width=14)
+            elif fuente == FUENTE_MQTT:
+                self.lbl_param.config(text="Prefijo")
+                self.var_param.set(self.cfg["mqtt_prefijo"])
+                self.entrada_param.config(width=20)
             else:
                 self.lbl_param.config(text="Puerto UDP")
                 self.var_param.set("5005")
+                self.entrada_param.config(width=14)
             self.entrada_param.config(state="normal")
             self.entrada_param.pack(side=tk.RIGHT, ipady=3, before=self.combo_fuente)
             self.lbl_param.pack(side=tk.RIGHT, padx=(14, 6), before=self.combo_fuente)
@@ -1356,6 +1382,14 @@ class Aplicacion(tk.Tk):
             if MAC_RE.match(param):
                 return BLETransport(direccion_mac=param)
             return BLETransport(nombre_dispositivo=param)
+        if fuente == FUENTE_MQTT:
+            prefijo = param.strip() or self.cfg["mqtt_prefijo"]
+            if not prefijo:
+                raise ValueError("Escriba el prefijo de los tópicos del hub (por ejemplo pucmm-pulsera-7f3a).")
+            t = MQTTTransport(self.cfg["mqtt_broker"], self.cfg["mqtt_puerto"], prefijo, self.cfg["mqtt_usuario"],
+                              self.cfg["mqtt_clave"], al_hub=lambda info: self.cola.put(("hub", info)))
+            t.id_destino = self.dispositivo_esperado
+            return t
         try:
             puerto = int(param.strip())
             if not 1 <= puerto <= 65535:
@@ -1417,6 +1451,10 @@ class Aplicacion(tk.Tk):
         self.btn_conectar.config(text="Detener", bg=ALERTA, activebackground="#9E1F1F")
         self._cambiar_conexion("conectando")
         self._limpiar_estado_visual()
+        self._hub = {}
+        self._pintar_hub()
+        if fuente == FUENTE_MQTT:
+            self.lbl_causas.config(text=f"Conectando con el broker {self.cfg['mqtt_broker']} · esperando los datos del hub")
         if fuente == FUENTE_UDP:
             self.lbl_causas.config(
                 text=f"Escuchando UDP en el puerto {self.var_param.get().strip()} · IP de esta PC: {ip_local()} "
@@ -1445,6 +1483,7 @@ class Aplicacion(tk.Tk):
         self._banner_obsoleto("SESIÓN DETENIDA")
         self._estado_demo()
         self._actualizar_enlace()
+        self._pintar_hub()
 
     def _cerrar_registro(self, conservar_ruta=False):
         if self.registrador is not None:
@@ -1462,6 +1501,40 @@ class Aplicacion(tk.Tk):
         fondo, texto, etiqueta = CONEXION[self.conexion]
         self.chip_conexion.config(bg=fondo, fg=texto, text=etiqueta)
 
+    # ---- hub (solo MQTT) ---------------------------------------------------
+
+    def _al_hub(self, info):
+        if self.fuente_actual != FUENTE_MQTT or self.hilo is None:
+            return
+        h = self._hub
+        if info.get("tipo") == "broker":
+            h["broker"] = info.get("texto")
+        elif info.get("tipo") == "estado":
+            antes = h.get("estado")
+            h["estado"] = "en línea" if info.get("texto") == "online" else "apagado"
+            h["id"] = info.get("hub")
+            if antes and antes != h["estado"]:
+                self.aviso(f"El hub {info.get('hub')} está {h['estado']}.")
+        elif info.get("tipo") == "info":
+            h["info"] = info.get("datos") or {}
+            h["id"] = info.get("hub")
+        self._pintar_hub()
+
+    def _pintar_hub(self):
+        if self.fuente_actual != FUENTE_MQTT or self.hilo is None:
+            self.lbl_hub.pack_forget()
+            return
+        h = self._hub
+        partes = [f"Broker: {h.get('broker') or 'conectando'}",
+                  f"Hub{' ' + h['id'] if h.get('id') else ''}: {h.get('estado') or 'sin noticias'}"]
+        datos = h.get("info")
+        if datos:
+            partes.append(f"pulsera conectada · {datos.get('pendientes', 0)} en cola"
+                          if datos.get("pulsera") == "conectada" else "buscando la pulsera")
+        mal = h.get("estado") == "apagado" or h.get("broker") == "sin conexión"
+        self.lbl_hub.config(text=" · ".join(partes), fg=ALERTA if mal else OK)
+        self.lbl_hub.pack(fill=tk.X, padx=14, pady=(0, 8))
+
     # ---- bucle de actualización ------------------------------------------
 
     def _procesar_cola(self):
@@ -1474,6 +1547,8 @@ class Aplicacion(tk.Tk):
                     self._manejar_evento(paquete)
                 elif tipo == "error":
                     self._manejar_error(paquete)
+                elif tipo == "hub":
+                    self._al_hub(paquete)
                 elif tipo == "fin" and self.hilo is not None:
                     self._manejar_fin()
         except queue.Empty:
@@ -1642,6 +1717,7 @@ class Aplicacion(tk.Tk):
         self._cambiar_conexion("error")
         self._banner_obsoleto("SIN CONEXIÓN", sin_senal=True)
         self._estado_demo()
+        self._pintar_hub()
         self._nueva_alerta("Error de conexión", mensaje, None, "SISTEMA", "ERROR", None, requiere_atencion=False)
 
     def _manejar_fin(self):
@@ -1655,6 +1731,7 @@ class Aplicacion(tk.Tk):
         self._cambiar_conexion("desconectado")
         self._banner_obsoleto("CONEXIÓN FINALIZADA", sin_senal=True)
         self._estado_demo()
+        self._pintar_hub()
         self._nueva_alerta("Conexión finalizada", "La fuente de datos se desconectó.", None, "SISTEMA",
                            "FIN", None, requiere_atencion=False)
 
@@ -1695,6 +1772,12 @@ class Aplicacion(tk.Tk):
             self.registrador.registrar_alerta("CERRADA", tarjeta.origen, tarjeta.tipo, tarjeta.detalle,
                                               tarjeta.seq, respuesta_s, cierre)
         self._actualizar_titulo_alertas()
+        # Con el hub, al atender una caída o un SOS se avisa a la pulsera: "AYUDA EN CAMINO" en su pantalla.
+        if tarjeta.tipo in ("FALL", "SOS") and self.hilo is not None and isinstance(self.transporte, MQTTTransport):
+            ident = self.dispositivo_esperado or self.transporte.ultimo_id
+            ok = self.transporte.enviar_comando(ident, {"cmd": "ack", "ev": tarjeta.tipo, "seq": tarjeta.seq})
+            self.aviso(f"Aviso enviado a la pulsera {ident}: ayuda en camino." if ok
+                       else "No se pudo avisar a la pulsera (sin conexión con el broker).")
 
     def alerta_escalada(self, tarjeta):
         if self.registrador is not None:

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VitalCare · Pruebas automáticas</title>
+  <link rel="stylesheet" href="../estilo.css">
+  <script src="../vendor/sql-wasm.js"></script>
+  <style>
+    body { overflow: auto; }
+    .informe { max-width: 900px; margin: 24px auto; padding: 0 16px; font: 14px/1.5 var(--familia); }
+    .informe h1 { font-size: 22px; margin: 0 0 4px; }
+    .informe .sub { color: var(--muted); margin: 0 0 16px; }
+    .linea { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 13px; padding: 2px 0; }
+    .linea.ok b { color: var(--ok); }
+    .linea.mal b { color: var(--alerta); }
+    .linea pre { color: var(--alerta); white-space: pre-wrap; margin: 4px 0 8px 24px; font-size: 12px; }
+    #total { font-size: 18px; font-weight: 700; margin-top: 16px; }
+    #total.ok { color: var(--ok); } #total.mal { color: var(--alerta); }
+    #zona-app { position: fixed; left: -3000px; top: 0; width: 1366px; height: 768px; display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <div class="informe">
+    <h1>VitalCare · Pruebas automáticas</h1>
+    <p class="sub">Las mismas 32 pruebas de <code>pruebas_testbed.py</code>. No usan la pulsera ni internet, y no tocan los datos guardados de la estación.</p>
+    <div id="lineas"></div>
+    <div id="total">Corriendo…</div>
+  </div>
+  <div id="zona-app"></div>
+  <script type="module">
+    import { definirPruebas, correr, AlmacenMemoria } from "./pruebas.js";
+    import { Aplicacion } from "../js/app.js";
+
+    const SQL = await window.initSqlJs({ locateFile: (f) => `../vendor/${f}` });
+    const errores = [];
+    window.addEventListener("error", (e) => errores.push(String(e.message)));
+    window.addEventListener("unhandledrejection", (e) => errores.push(String(e.reason && e.reason.message || e.reason)));
+
+    async function crearApp({ intervaloSim, autoiniciar }) {
+      errores.length = 0;
+      const almacen = new AlmacenMemoria();
+      const raiz = document.createElement("div");
+      raiz.style.cssText = "height:100%;display:flex;flex-direction:column";
+      document.getElementById("zona-app").replaceChildren(raiz);
+      const app = new Aplicacion(raiz, { SQL, almacen, bytesBase: null, intervaloSim, autoiniciar });
+      return { app, almacen, errores };
+    }
+
+    const lineas = document.getElementById("lineas");
+    const pruebas = definirPruebas({ SQL, conVentana: true, crearApp });
+    const fallos = await correr(pruebas, (r) => {
+      const d = document.createElement("div");
+      d.className = "linea " + (r.ok ? "ok" : "mal");
+      d.innerHTML = `<b>${r.ok ? "OK   " : "FALLA"}</b> <span></span>`;
+      d.querySelector("span").textContent = r.nombre;
+      if (!r.ok) { const pre = document.createElement("pre"); pre.textContent = r.error; d.append(pre); }
+      lineas.append(d);
+    });
+    const total = document.getElementById("total");
+    total.textContent = `${pruebas.length - fallos} de ${pruebas.length} pruebas correctas`;
+    total.className = fallos ? "mal" : "ok";
+    document.title = total.textContent;
+    window.resultadoPruebas = { total: pruebas.length, fallos };
+  </script>
+</body>
+</html>

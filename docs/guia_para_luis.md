@@ -25,7 +25,7 @@ Guía corta para que los dos trabajemos sobre el mismo código sin pisarnos.
    python pruebas_testbed.py
    ```
 
-   Debe terminar con `32 de 32 pruebas correctas`.
+   Debe terminar con `33 de 33 pruebas correctas`.
 
 5. Abrir la aplicación:
 
@@ -57,19 +57,48 @@ marque y vuelve a subir.
 
 ## Probar con la pulsera real
 
-La pulsera física la tienes tú, así que esta parte te toca:
+La pulsera física la tienes tú, así que esta parte te toca. Hay dos caminos y no se pueden usar a la
+vez, porque la pulsera acepta una sola conexión Bluetooth:
 
-1. En la aplicación, elegir la fuente **Bluetooth (BLE)** y escribir el nombre con el que se anuncia
-   la pulsera (por defecto `W01`) o su dirección MAC.
-2. Pulsar **Conectar**.
-3. Si no aparece nada, revisar que el firmware use los UUID y el formato de
-   [contrato_pulsera.md](contrato_pulsera.md). Es el acuerdo entre tu firmware y mi programa.
+**Por el hub (el de la presentación).** La pulsera se conecta al hub y el hub publica en el broker.
+
+1. Encender el hub con el WiFi configurado y la pulsera.
+2. En la aplicación (de escritorio o web), elegir la fuente **Hub (MQTT)**. El prefijo ya viene
+   puesto: `pucmm-pulsera-7f3a`, igual que `MQTT_PREFIJO` del hub.
+3. Pulsar **Conectar**. En el panel *Enlace con la pulsera* debe decir "Broker: conectado · Hub ...:
+   en línea · pulsera conectada", y el número de recibidos sube cada 2 segundos.
+4. En el escritorio hace falta `pip install paho-mqtt` una vez. La web no necesita nada.
+
+**Bluetooth directo a la PC (sin hub).**
+
+1. Apagar el hub (o desconectarlo de la pulsera).
+2. Elegir la fuente **Bluetooth (BLE)** y escribir el nombre con el que se anuncia la pulsera (por
+   defecto `W01`) o su dirección MAC. En la web, el navegador muestra una ventana para elegirla.
+3. Pulsar **Conectar**.
+
+Si no aparece nada, revisar que el firmware use los UUID, los tópicos y el formato de
+[contrato_pulsera.md](contrato_pulsera.md). Es el acuerdo entre tu firmware y mi programa.
+
+Para probar sin la pulsera:
+
+```
+pip install paho-mqtt
+python emisor_mqtt_prueba.py
+```
+
+Ese script hace de hub: publica una pulsera simulada en el broker público con nuestros tópicos.
 
 Para probar por WiFi sin Bluetooth, correr en otra terminal:
 
 ```
 python emisor_udp_prueba.py <ip-de-la-pc-que-recibe> 5005
 ```
+
+## La versión web
+
+La carpeta `web/` es la estación en versión web, la misma que está en
+https://vitalcare-pulsera.vercel.app. Cómo subirla de nuevo a Vercel y cómo probarla está en
+[subir_web_vercel.md](subir_web_vercel.md).
 
 ## Qué no se sube al repositorio
 

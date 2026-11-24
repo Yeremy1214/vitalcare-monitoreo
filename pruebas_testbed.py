@@ -4,7 +4,7 @@ Pruebas automáticas del testbed. No necesitan hardware, Bluetooth ni internet.
     python pruebas_testbed.py
 
 Revisa la lógica de umbrales, el conteo de paquetes perdidos, el resumen, el CSV, el
-simulador y la recepción por UDP (con un emisor local). Si hay pantalla disponible,
+simulador, la recepción por UDP (con un emisor local) y por el hub MQTT (con un broker de mentira). Si hay pantalla disponible,
 también abre la ventana unos segundos y comprueba que no falle.
 """
 
@@ -30,7 +30,7 @@ from logica import (
 )
 from datos import AMBOS, BaseDatos, meses_de_edad
 from registro import RegistradorCSV
-from transportes import ESCENARIOS, SimuladorTransport, UDPTransport, despachar_json
+from transportes import ESCENARIOS, MQTTTransport, SimuladorTransport, UDPTransport, despachar_json
 
 RESULTADOS = []
 
@@ -380,6 +380,83 @@ def simulador_sin_reenvio_lo_dice():
     sim.fijar_escenario("Señal inestable SIN reenvío (pérdida real)")
     assert sim.solicitar_reenvio([1, 2]) is False
     assert UDPTransport(puerto=0).solicitar_reenvio([1]) is False  # UDP y BLE no tienen reenvío todavía
+
+
+@prueba
+def mqtt_recibe_por_el_hub_y_le_manda_ordenes():
+    """La fuente Hub (MQTT) con un broker de mentira: no hace falta internet ni paho-mqtt instalado."""
+    import threading
+    import types
+
+    publicados, clientes = [], []
+
+    class ClienteFalso:
+        def __init__(self, *a, **kw):
+            self.on_connect = self.on_message = self.on_disconnect = None
+            self.suscrito = None
+            clientes.append(self)
+
+        def username_pw_set(self, *a): pass
+        def ws_set_options(self, **kw): pass
+        def tls_set(self, *a, **kw): pass
+        def reconnect_delay_set(self, *a): pass
+        def connect_async(self, host, puerto, keepalive=60): self.destino = (host, puerto)
+        def loop_start(self): threading.Timer(0.05, lambda: self.on_connect(self, None, None, 0)).start()
+        def loop_stop(self): pass
+        def disconnect(self): pass
+        def is_connected(self): return True
+        def subscribe(self, lista): self.suscrito = lista
+
+        def publish(self, tema, texto, qos=0, retain=False):
+            publicados.append((tema, json.loads(texto)))
+            return types.SimpleNamespace(rc=0)
+
+    falso = types.ModuleType("paho.mqtt.client")
+    falso.Client = ClienteFalso
+    falso.CallbackAPIVersion = types.SimpleNamespace(VERSION2=2)
+    guardados = {k: sys.modules.get(k) for k in ("paho", "paho.mqtt", "paho.mqtt.client")}
+    sys.modules["paho"] = types.ModuleType("paho")
+    sys.modules["paho.mqtt"] = types.ModuleType("paho.mqtt")
+    sys.modules["paho.mqtt"].client = falso
+    sys.modules["paho"].mqtt = sys.modules["paho.mqtt"]
+    sys.modules["paho.mqtt.client"] = falso
+    try:
+        hub, tel, ev = [], [], []
+        t = MQTTTransport("broker.prueba", 1883, "pre", al_hub=hub.append)
+
+        def mensaje(tema, datos):
+            texto = datos if isinstance(datos, str) else json.dumps(datos)
+            clientes[0].on_message(clientes[0], None, types.SimpleNamespace(topic=tema, payload=texto.encode()))
+
+        async def main():
+            tarea = asyncio.create_task(t.recibir_paquetes(tel.append, ev.append))
+            await asyncio.sleep(0.2)
+            assert clientes and clientes[0].destino == ("broker.prueba", 1883)
+            assert ("pre/pulsera/+/telemetria", 1) in clientes[0].suscrito
+            mensaje("pre/pulsera/W01/telemetria", {"id": "W01", "seq": 1, "ts": 1, "hr": 77, "spo2": 98,
+                                                    "temp": 36.7, "batt": 80, "st": "OK"})
+            mensaje("pre/pulsera/W01/evento", {"id": "W01", "seq": 2, "ts": 2, "ev": "SOS", "sev": "HIGH"})
+            mensaje("pre/pulsera/W01/telemetria", "esto no es json")
+            mensaje("pre/hub/H1/estado", "online")
+            t.id_destino = "W01"
+            assert t.solicitar_reenvio(list(range(5, 30))) is True
+            assert t.enviar_comando("W01", {"cmd": "ack", "ev": "SOS", "seq": 2}) is True
+            await t.desconectar()
+            await asyncio.wait_for(tarea, 2)
+
+        asyncio.run(main())
+        assert len(tel) == 1 and tel[0]["hr"] == 77
+        assert len(ev) == 1 and ev[0]["ev"] == "SOS"
+        assert any(h.get("tipo") == "estado" and h.get("texto") == "online" for h in hub)
+        reenvios = [m["seq"] for tema, m in publicados if m.get("cmd") == "resend"]
+        assert reenvios == [list(range(5, 25)), list(range(25, 30))], reenvios  # en tandas de 20
+        assert ("pre/pulsera/W01/comando", {"cmd": "ack", "ev": "SOS", "seq": 2}) in publicados
+    finally:
+        for k, v in guardados.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
 
 
 # ----------------------------------------------------------------------

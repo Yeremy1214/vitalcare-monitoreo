@@ -89,6 +89,21 @@ CONFIG_BASE = {
     "centro": ("Centro de salud", "Nombre del centro que aparece en los reportes", ""),
 }
 
+# Conexión con el hub por MQTT. El programa de escritorio usa mqtt_puerto (1883, MQTT normal);
+# la versión web usa mqtt_puerto_web (8884, WebSocket seguro). Están las dos para que el mismo
+# vitalcare.db sirva en una y en otra.
+CONFIG_MQTT = {
+    "mqtt_broker": ("broker.hivemq.com", "Servidor MQTT (broker) al que publica el hub", ""),
+    "mqtt_puerto": (1883, "Puerto MQTT del broker que usa este programa (1883 normal, 8883 cifrado)", "puerto"),
+    "mqtt_puerto_web": (8884, "Puerto WebSocket seguro del broker (el que usa el navegador)", "puerto"),
+    "mqtt_prefijo": ("pucmm-pulsera-7f3a", "Prefijo de los tópicos: igual que MQTT_PREFIJO del hub", ""),
+    "mqtt_usuario": ("", "Usuario del broker (vacío en el broker público de prueba)", ""),
+    "mqtt_clave": ("", "Clave del broker (vacía en el broker público de prueba)", "clave"),
+}
+
+# Valores internos que el programa guarda en la tabla config pero no son parámetros del centro.
+CLAVES_INTERNAS = ("ultimo_paciente", "ultima_fuente", "ultimo_parametro")
+
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS pacientes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -303,11 +318,11 @@ class BaseDatos:
                     self.cx.execute("INSERT INTO umbrales (perfil, sexo, signo, normal_min, normal_max,"
                                     " vig_min, vig_max) VALUES (?,?,?,?,?,?,?)",
                                     (perfil, AMBOS, signo, nmin, nmax, vmin, vmax))
-        if not self.q1("SELECT 1 FROM config LIMIT 1"):
-            for clave, (valor, desc, unidad) in CONFIG_BASE.items():
-                self.cx.execute("INSERT INTO config (clave, valor, descripcion, unidad, actualizado,"
-                                " actualizado_por) VALUES (?,?,?,?,?,?)",
-                                (clave, str(valor), desc, unidad, ahora(), "instalación"))
+        # Las claves que falten se agregan sin tocar las que el centro ya cambió.
+        for clave, (valor, desc, unidad) in {**CONFIG_BASE, **CONFIG_MQTT}.items():
+            self.cx.execute("INSERT OR IGNORE INTO config (clave, valor, descripcion, unidad, actualizado,"
+                            " actualizado_por) VALUES (?,?,?,?,?,?)",
+                            (clave, str(valor), desc, unidad, ahora(), "instalación"))
 
     # ---------------- configuración ----------------
     def config(self, clave, defecto=None):
@@ -327,11 +342,18 @@ class BaseDatos:
         antes = self.config(clave)
         self.ejec("UPDATE config SET valor=?, actualizado=?, actualizado_por=? WHERE clave=?",
                   (str(valor), ahora(), usuario, clave))
-        self.auditar(usuario, "Cambio de configuración", "config", None,
-                     f"{clave}: {antes} → {valor}")
+        detalle = f"{clave}: (oculta) → (oculta)" if clave == "mqtt_clave" else f"{clave}: {antes} → {valor}"
+        self.auditar(usuario, "Cambio de configuración", "config", None, detalle)
+
+    def fijar_interno(self, clave, valor, descripcion):
+        """Valor interno que no aparece en la tabla de parámetros (por ejemplo, el último paciente)."""
+        self.ejec("INSERT INTO config (clave, valor, descripcion, actualizado, actualizado_por)"
+                  " VALUES (?, ?, ?, ?, 'sistema') ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor,"
+                  " actualizado=excluded.actualizado", (clave, str(valor if valor is not None else ""), descripcion, ahora()))
 
     def listar_config(self):
-        return self.q("SELECT * FROM config ORDER BY clave")
+        marcas = ",".join("?" * len(CLAVES_INTERNAS))
+        return self.q(f"SELECT * FROM config WHERE clave NOT IN ({marcas}) ORDER BY clave", CLAVES_INTERNAS)
 
     # ---------------- pacientes ----------------
     def crear_paciente(self, datos, usuario):

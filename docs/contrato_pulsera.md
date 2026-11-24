@@ -87,6 +87,43 @@ La estación escucha en el puerto **5005** por defecto y acepta el mismo JSON, u
 paquetes por datagrama separados por salto de línea. Para probar sin la pulsera está
 `emisor_udp_prueba.py`, que simula el envío desde otra máquina de la misma red.
 
+## Hub por MQTT
+
+El hub (ESP32-S3) recibe la pulsera por Bluetooth y publica cada paquete en un broker MQTT por
+WiFi. La estación web y la de escritorio (fuente **Hub (MQTT)**) se suscriben a esos tópicos, así
+que pueden mirar a la misma pulsera a la vez y desde cualquier PC con internet.
+
+| Tópico | Quién publica | Contenido |
+|---|---|---|
+| `<prefijo>/pulsera/<id>/telemetria` | hub | El JSON de telemetría, tal como lo mandó la pulsera |
+| `<prefijo>/pulsera/<id>/evento` | hub | El JSON de evento (`FALL`, `SOS`) |
+| `<prefijo>/hub/<hub>/estado` | hub | `online` al conectarse y `offline` como último deseo (LWT), **retenido** |
+| `<prefijo>/hub/<hub>/info` | hub | `{"pulsera":"conectada","pendientes":N}` cada pocos segundos |
+| `<prefijo>/pulsera/<id>/comando` | estación | Órdenes para la pulsera; el hub se las pasa por Bluetooth |
+
+Órdenes que manda la estación por `comando`:
+
+```json
+{"cmd":"ack","ev":"FALL","seq":146}
+{"cmd":"resend","seq":[121,122,123]}
+```
+
+- `ack`: el personal atendió la caída o el SOS. La pulsera muestra "AYUDA EN CAMINO".
+- `resend`: el mismo reenvío de la sección anterior. La estación manda como mucho 20 números por
+  orden y repite cada 4 s mientras falten.
+
+Valores del proyecto (se cambian en Configuración → Parámetros de alerta):
+
+| Parámetro | Valor | Quién lo usa |
+|---|---|---|
+| `mqtt_broker` | `broker.hivemq.com` | todos |
+| `mqtt_puerto` | `1883` | el hub y el programa de escritorio |
+| `mqtt_puerto_web` | `8884` (WebSocket seguro, ruta `/mqtt`) | la página web: un navegador no puede usar el 1883 |
+| `mqtt_prefijo` | `pucmm-pulsera-7f3a` | todos; debe ser igual a `MQTT_PREFIJO` del hub |
+
+Para probar sin el hub está `emisor_mqtt_prueba.py`, que publica una pulsera simulada con estos
+mismos tópicos y atiende el `ack` y el `resend`.
+
 ## Qué hace la estación con lo que recibe
 
 1. Comprueba que el `id` corresponda a la pulsera asignada al paciente en monitoreo. Si no, descarta
