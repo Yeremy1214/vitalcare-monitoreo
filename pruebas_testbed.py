@@ -480,8 +480,13 @@ def ventana_arranca_recibe_y_cierra_sin_errores():
     errores = []
     tkinter.Tk.report_callback_exception = lambda self, e, v, tb: errores.append("".join(traceback.format_exception(e, v, tb)))
     with tempfile.TemporaryDirectory() as carpeta:
-        app = A.Aplicacion(intervalo_sim=0.1, carpeta_datos=carpeta,
+        app = A.Aplicacion(intervalo_sim=0.1, autoiniciar=False, carpeta_datos=carpeta,
                            bd_ruta=os.path.join(carpeta, 'prueba.db'))
+        # Como en la demostración: se le pone una pulsera simulada a María y se monitorea.
+        maria = app.bd.paciente_por_expediente("EXP-2026-0001")
+        app.bd.asignar_pulsera(maria["id"], app.bd.pulsera_por_dispositivo("W02")["id"], "pruebas")
+        app.monitorear_paciente(maria["id"])
+        app.after(150, app._conectar)
         tipos = set()
 
         def accion(t, fn):
@@ -508,15 +513,55 @@ def ventana_arranca_recibe_y_cierra_sin_errores():
         assert any(f.startswith("huecos_") for f in os.listdir(carpeta))
 
 
+@prueba
+def sin_paciente_con_pulsera_no_se_muestra_nada():
+    """Sin paciente en monitoreo no se conecta ni se aceptan datos: primero se asigna la pulsera."""
+    try:
+        import tkinter
+
+        raiz = tkinter.Tk()
+        raiz.destroy()
+    except Exception:  # noqa: BLE001
+        print("    (sin pantalla disponible: se omite la prueba de la ventana)")
+        return
+    import app_testbed as A
+
+    with tempfile.TemporaryDirectory() as carpeta:
+        app = A.Aplicacion(intervalo_sim=0.1, autoiniciar=False, carpeta_datos=carpeta,
+                           bd_ruta=os.path.join(carpeta, "prueba.db"))
+        try:
+            assert app.bd.paciente_por_dispositivo("W01") is None  # los datos de ejemplo no traen pulsera puesta
+            app._conectar()
+            assert app.hilo is None, "conectó sin paciente"
+            app._manejar_telemetria({"id": "W01", "seq": 1, "hr": 80, "spo2": 97, "temp": 36.6, "batt": 90})
+            app._manejar_evento({"id": "W01", "seq": 2, "ev": "FALL", "sev": "HIGH"})
+            app.update()
+            assert app.sesion.paquetes_telemetria == 0 and not app.sesion.eventos
+            assert any(t.tipo == "PULSERA_SIN_PACIENTE" for t in app.tarjetas_alerta)
+            carlos = app.bd.paciente_por_expediente("EXP-2026-0002")
+            app.monitorear_paciente(carlos["id"])
+            app._conectar()
+            assert app.hilo is None, "conectó con un paciente sin pulsera"
+            app.bd.asignar_pulsera(carlos["id"], app.bd.pulsera_por_dispositivo("W03")["id"], "pruebas")
+            app.monitorear_paciente(carlos["id"])
+            app._conectar()
+            assert app.hilo is not None and app.transporte.device_id == "W03"  # el simulador transmite como W03
+        finally:
+            app._al_cerrar()
+
+
 # ----------------------------------------------------------------------
 # Gestión de pacientes, pulseras y configuración del centro
 # ----------------------------------------------------------------------
 
 
 def _bd():
+    """Base con los datos de ejemplo y la W01 puesta a María, como se haría en la demostración."""
     carpeta = tempfile.mkdtemp()
     bd = BaseDatos(os.path.join(carpeta, "prueba.db"))
     bd.sembrar_demostracion("pruebas")
+    maria = bd.paciente_por_expediente("EXP-2026-0001")
+    bd.asignar_pulsera(maria["id"], bd.pulsera_por_dispositivo("W01")["id"], "pruebas", "Asignación inicial al ingreso")
     return bd
 
 
@@ -692,6 +737,7 @@ def ventana_con_paciente_no_mezcla_datos_de_otra_pulsera():
                            bd_ruta=os.path.join(carpeta, "prueba.db"))
         try:
             paciente = app.bd.paciente_por_expediente("EXP-2026-0001")
+            app.bd.asignar_pulsera(paciente["id"], app.bd.pulsera_por_dispositivo("W01")["id"], "pruebas")
             app.monitorear_paciente(paciente["id"])
             app.update()
             assert app.dispositivo_esperado == "W01"

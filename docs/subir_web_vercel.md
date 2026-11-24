@@ -63,10 +63,12 @@ project*) y elegir **vitalcare-pulsera**. Si pregunta por el directorio, dejar e
    tarjetas de signos y el simulador corriendo con datos. En *Configuración* tiene que aparecer la
    pestaña *Datos del navegador*.
 3. Abrir https://vitalcare-pulsera.vercel.app/pruebas/ y esperar unos 15 segundos. Debe decir
-   **32 de 32 pruebas correctas**.
+   **33 de 33 pruebas correctas**.
 
 La primera vez que se abre en un navegador, la web arranca con los mismos datos de ejemplo del
-escritorio: María Pérez Gómez con la pulsera VC-W-0001 (W01), Carlos Martínez Díaz y cuatro pulseras.
+escritorio: María Pérez Gómez, Carlos Martínez Díaz y cuatro pulseras, **sin ninguna asignada**. Sin
+paciente con pulsera no se muestra ni se guarda nada: primero se elige al paciente, se le asigna la
+pulsera y después se pulsa Conectar.
 Lo que se había registrado en la versión vieja de la web no pasa a la nueva.
 
 ## 4. Probar con la pulsera real
@@ -74,7 +76,8 @@ Lo que se había registrado en la versión vieja de la web no pasa a la nueva.
 1. Cerrar el programa de escritorio si estaba conectado a la pulsera por Bluetooth: la pulsera
    acepta una sola conexión y la necesita el hub.
 2. Encender el hub y la pulsera.
-3. En la web, elegir en *Paciente en monitoreo* a **María Pérez Gómez**.
+3. Ingresar al paciente que lleva la pulsera física (*Pacientes → Ingresar paciente*), asignarle la
+   **VC-W-0001 (W01)** con *Asignar o cambiar pulsera* y pulsar *Monitorear a este paciente*.
 4. En *Fuente de datos* elegir **Hub (MQTT)**. El prefijo ya viene puesto (`pucmm-pulsera-7f3a`).
    Pulsar **Conectar**.
 5. En el panel *Enlace con la pulsera* debe aparecer: *Broker: conectado · Hub ...: en línea ·

@@ -25,7 +25,7 @@ Guía corta para que los dos trabajemos sobre el mismo código sin pisarnos.
    python pruebas_testbed.py
    ```
 
-   Debe terminar con `33 de 33 pruebas correctas`.
+   Debe terminar con `34 de 34 pruebas correctas`.
 
 5. Abrir la aplicación:
 

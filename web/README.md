@@ -52,11 +52,11 @@ python ../emisor_mqtt_prueba.py
 
 ## Pruebas automáticas
 
-Las mismas 32 de `pruebas_testbed.py`, traducidas. Las dos de WiFi/UDP se cambiaron por dos de la
+Las mismas de `pruebas_testbed.py`, traducidas (33). Las dos de WiFi/UDP se cambiaron por dos de la
 fuente Hub (MQTT) con un broker de mentira.
 
 - En el navegador: abrir `/pruebas/` (por ejemplo https://vitalcare-pulsera.vercel.app/pruebas/).
-  Debe decir `32 de 32 pruebas correctas`. No toca los datos guardados de la estación.
+  Debe decir `33 de 33 pruebas correctas`. No toca los datos guardados de la estación.
 - Con Node: `node pruebas/correr_node.mjs` corre las 30 que no necesitan ventana.
 
 ## Archivos

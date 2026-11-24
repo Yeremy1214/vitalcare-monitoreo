@@ -298,7 +298,8 @@ export class Aplicacion {
 
     if (autoiniciar) {
       const ultima = this.bd.config("ultima_fuente", FUENTE_SIM);
-      if (ultima === FUENTE_SIM || ultima === FUENTE_MQTT) setTimeout(() => this._conectar(), 200);
+      if (!this.pacienteId || !this.dispositivoEsperado) setTimeout(() => this._conectar(), 200); // explica qué falta
+      else if (ultima === FUENTE_SIM || ultima === FUENTE_MQTT) setTimeout(() => this._conectar(), 200);
       else this.aviso("Pulse Conectar para buscar la pulsera por Bluetooth.");
     }
   }
@@ -355,7 +356,7 @@ export class Aplicacion {
 
   _construirContexto() {
     this.selPaciente = el("select", { class: "sel-paciente", onchange: () => this._alElegirPaciente() });
-    this.lblFicha = el("span", { class: "ficha" }, "Elija un paciente ingresado o trabaje en modo libre.");
+    this.lblFicha = el("span", { class: "ficha" }, "Elija un paciente ingresado con pulsera asignada para ver sus signos.");
     this.lblAlergias = el("span", { class: "alergias" });
     this.lblPulsera = el("span", { class: "chip-pulsera" }, "Sin pulsera asignada");
     this.tabMon.append(el("div", { class: "tarjeta contexto" },
@@ -507,7 +508,7 @@ export class Aplicacion {
 
   refrescarComboPacientes() {
     this._opcionesPaciente = new Map();
-    const opciones = [el("option", { value: "" }, "Modo libre (sin paciente)")];
+    const opciones = [el("option", { value: "" }, "Sin paciente seleccionado")];
     for (const p of this.bd.listarPacientes("", "Ingresado")) {
       opciones.push(el("option", { value: String(p.id) }, `${nombreCompleto(p)} · ${ubicacion(p)} · ${p.serie || "sin pulsera"}`));
     }
@@ -522,6 +523,7 @@ export class Aplicacion {
 
   /** Deja la pantalla de monitoreo apuntando a este paciente y su pulsera. */
   monitorearPaciente(pid) {
+    const cambio = pid !== this.pacienteId;
     this.pacienteId = pid;
     this.bd.fijarInterno("ultimo_paciente", pid || "", "Paciente que se estaba monitoreando");
     this.paciente = pid ? this.bd.paciente(pid) : null;
@@ -536,6 +538,14 @@ export class Aplicacion {
     this.seleccionarPestana("mon");
     if (pid && asignacion) {
       this.aviso(`Monitoreando a ${nombreCompleto(this.paciente)} con la pulsera ${asignacion.serie} (${asignacion.id_dispositivo}).`);
+    } else if (pid) {
+      this.aviso(`${nombreCompleto(this.paciente)} no tiene pulsera asignada: use Cambiar pulsera para asignarle una.`);
+    }
+    // Cada sesión es de un paciente: al cambiar de paciente se cierra la sesión y se abre otra.
+    if (cambio && this.activo) {
+      const fuente = this.fuenteActual;
+      this._detener();
+      if (pid && asignacion && fuente !== FUENTE_BLE) this._conectar();
     }
   }
 
@@ -556,7 +566,7 @@ export class Aplicacion {
 
   _pintarFicha() {
     if (!this.paciente) {
-      this.lblFicha.textContent = "Modo libre: se muestran los datos de cualquier pulsera, con los umbrales de adulto en reposo.";
+      this.lblFicha.textContent = "Sin paciente en monitoreo. Elija uno con pulsera asignada: los datos de una pulsera solo se muestran y se guardan si está puesta a un paciente.";
       this._chipPulsera("Sin paciente", COLOR.GRIS_BG, COLOR.TEXTO);
       this.lblAlergias.textContent = "";
       return;
@@ -595,12 +605,14 @@ export class Aplicacion {
     if (pid !== this.pacienteId) { this.refrescarComboPacientes(); return; }
     if (info === null) {
       this.dispositivoEsperado = null;
+      if (this.activo) this._detener(); // sin pulsera no hay de dónde recibir datos de este paciente
       this._pintarFicha();
       this.refrescarComboPacientes();
       return;
     }
     this.dispositivoEsperado = info.dispositivo;
     if (this.transporte instanceof MQTTTransport) this.transporte.idDestino = info.dispositivo;
+    if (this.transporte instanceof SimuladorTransport) this.transporte.cambiarPulsera(info.dispositivo);
     this._ajenos = {};
     this.sesion.seq.reiniciarSecuencia();
     this._huecos = new Map();
@@ -821,7 +833,7 @@ export class Aplicacion {
   }
 
   _crearTransporte(fuente, param) {
-    if (fuente === FUENTE_SIM) return new SimuladorTransport({ intervaloS: this.intervaloSim });
+    if (fuente === FUENTE_SIM) return new SimuladorTransport({ deviceId: this.dispositivoEsperado || "W01", intervaloS: this.intervaloSim });
     if (fuente === FUENTE_BLE) return new BLETransport(param.trim() || "W01");
     const prefijo = param.trim() || this.cfg.mqtt_prefijo;
     if (!prefijo) throw new Error("Escriba el prefijo de los tópicos del hub (por ejemplo pucmm-pulsera-7f3a).");
@@ -838,6 +850,15 @@ export class Aplicacion {
 
   _conectar() {
     if (this.activo) return;
+    // Como en un hospital: primero se ingresa al paciente y se le pone la pulsera; después se monitorea.
+    if (!this.pacienteId || !this.dispositivoEsperado) {
+      const texto = !this.pacienteId ? "Elija primero al paciente en monitoreo."
+        : "Este paciente no tiene pulsera asignada: use Cambiar pulsera para asignarle una.";
+      this.aviso(texto);
+      this._bannerObsoleto(!this.pacienteId ? "SIN PACIENTE" : "SIN PULSERA ASIGNADA");
+      this.lblCausas.textContent = texto;
+      return;
+    }
     const fuente = this.selFuente.value;
     let transporte;
     try {
@@ -1047,8 +1068,18 @@ export class Aplicacion {
    * asignada. Si llega otra, se avisa en lugar de mezclar datos de dos personas.
    */
   _esDelPaciente(p) {
-    if (!this.dispositivoEsperado) return true;
     const ident = String(p.id ?? "").trim();
+    if (!this.dispositivoEsperado) {
+      if (ident && !this._ajenos[ident]) {
+        this._ajenos[ident] = true;
+        const duena = this.bd.pacientePorDispositivo(ident);
+        const deQuien = duena ? `, asignada a ${duena.nombre} ${duena.apellidos}` : ", que no está asignada a ningún paciente";
+        this._nuevaAlerta("Pulsera transmitiendo sin paciente en monitoreo",
+          `Llegan datos de la pulsera ${ident}${deQuien}. No se muestran ni se guardan hasta que se elija al paciente y tenga esa pulsera asignada.`,
+          "MEDIA", "SISTEMA", "PULSERA_SIN_PACIENTE", null, { requiereAtencion: false, leve: true });
+      }
+      return false;
+    }
     if (ident === this.dispositivoEsperado) return true;
     if (ident && !this._ajenos[ident]) {
       this._ajenos[ident] = true;
@@ -1101,6 +1132,7 @@ export class Aplicacion {
   }
 
   _manejarEvento(p) {
+    if (!this._esDelPaciente(p)) return;
     if (this.registrador) this.registrador.registrarEvento(p);
     this.sesion.agregarEvento(p, ahoraS());
     this._revisarIntegridad();

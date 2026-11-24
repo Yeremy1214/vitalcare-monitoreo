@@ -1,4 +1,4 @@
-// Pruebas automáticas de VitalCare Web: las mismas 32 de pruebas_testbed.py, en JavaScript.
+// Pruebas automáticas de VitalCare Web: las mismas de pruebas_testbed.py, en JavaScript.
 // No necesitan hardware, Bluetooth ni internet.
 //
 //   En el navegador: abrir  /pruebas/  (por ejemplo https://vitalcare-pulsera.vercel.app/pruebas/)
@@ -52,7 +52,13 @@ function leerCSV(linea) {
 export function definirPruebas({ SQL, conVentana = false, crearApp = null }) {
   const P = [];
   const prueba = (nombre, fn, ventana = false) => P.push({ nombre, fn, ventana });
-  const bd = () => { const b = new BaseDatos(SQL); b.sembrarDemostracion("pruebas"); return b; };
+  // Base con los datos de ejemplo y la W01 puesta a María, como se haría en la demostración.
+  const bd = () => {
+    const b = new BaseDatos(SQL);
+    b.sembrarDemostracion("pruebas");
+    b.asignarPulsera(b.pacientePorExpediente("EXP-2026-0001").id, b.pulseraPorDispositivo("W01").id, "pruebas", "Asignación inicial al ingreso");
+    return b;
+  };
 
   // ------------------------------------------------------------ lógica
   prueba("clasifica_signos_vitales", () => {
@@ -351,8 +357,13 @@ export function definirPruebas({ SQL, conVentana = false, crearApp = null }) {
 
   // ------------------------------------------------------------ ventana
   prueba("ventana_arranca_recibe_y_cierra_sin_errores", async () => {
-    const { app, almacen, errores } = await crearApp({ intervaloSim: 0.1, autoiniciar: true });
+    const { app, almacen, errores } = await crearApp({ intervaloSim: 0.1, autoiniciar: false });
     try {
+      // Como en la demostración: se le pone una pulsera simulada a María y se monitorea.
+      const maria = app.bd.pacientePorExpediente("EXP-2026-0001");
+      app.bd.asignarPulsera(maria.id, app.bd.pulseraPorDispositivo("W02").id, "pruebas");
+      app.monitorearPaciente(maria.id);
+      app._conectar();
       const cierre = { resolucion: "Falsa alarma", accion_realizada: "El paciente presionó sin querer", atendido_por: "Enf. Pérez", indicacion_medica: false, medico: "" };
       const tipos = new Set();
       await dormir(800); app._demoEvento("FALL");
@@ -370,6 +381,27 @@ export function definirPruebas({ SQL, conVentana = false, crearApp = null }) {
       afirmar(app.sesion.paquetesTelemetria > 0);
       afirmar(tipos.has("BATERIA_BAJA") && tipos.has("BATERIA_CRITICA"), JSON.stringify([...tipos]));
       afirmar(almacen.lineasDe("huecos").length > 0);
+    } finally { app.destruir(); }
+  }, true);
+
+  prueba("sin_paciente_con_pulsera_no_se_muestra_nada", async () => {
+    const { app } = await crearApp({ intervaloSim: 0.1, autoiniciar: false });
+    try {
+      afirmar(app.bd.pacientePorDispositivo("W01") === null, "los datos de ejemplo no deben traer pulsera puesta");
+      app._conectar();
+      afirmar(!app.activo, "conectó sin paciente");
+      app._manejarTelemetria({ id: "W01", seq: 1, hr: 80, spo2: 97, temp: 36.6, batt: 90 });
+      app._manejarEvento({ id: "W01", seq: 2, ev: "FALL", sev: "HIGH" });
+      afirmar(app.sesion.paquetesTelemetria === 0 && app.sesion.eventos.length === 0);
+      afirmar(app.tarjetasAlerta.some((t) => t.tipo === "PULSERA_SIN_PACIENTE"));
+      const carlos = app.bd.pacientePorExpediente("EXP-2026-0002");
+      app.monitorearPaciente(carlos.id);
+      app._conectar();
+      afirmar(!app.activo, "conectó con un paciente sin pulsera");
+      app.bd.asignarPulsera(carlos.id, app.bd.pulseraPorDispositivo("W03").id, "pruebas");
+      app.monitorearPaciente(carlos.id);
+      app._conectar();
+      afirmar(app.activo && app.transporte.deviceId === "W03", "el simulador debe transmitir como W03");
     } finally { app.destruir(); }
   }, true);
 
@@ -498,6 +530,7 @@ export function definirPruebas({ SQL, conVentana = false, crearApp = null }) {
     const { app } = await crearApp({ intervaloSim: 0.1, autoiniciar: false });
     try {
       const paciente = app.bd.pacientePorExpediente("EXP-2026-0001");
+      app.bd.asignarPulsera(paciente.id, app.bd.pulseraPorDispositivo("W01").id, "pruebas");
       app.monitorearPaciente(paciente.id);
       afirmar(app.dispositivoEsperado === "W01");
       afirmarIgual(app.umbrales.hr.normal, [60, 100]);

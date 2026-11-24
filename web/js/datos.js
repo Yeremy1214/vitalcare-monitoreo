@@ -704,19 +704,22 @@ export class BaseDatos {
   }
 
   // ---------------- datos de demostración ----------------
-  /** Crea cuatro pulseras y dos pacientes de ejemplo la primera vez. */
+  /**
+   * Crea cuatro pulseras y dos pacientes de ejemplo la primera vez. Ninguna pulsera queda
+   * asignada: en la demostración se ve el proceso completo (ingreso, asignación y monitoreo).
+   * La VC-W-0001 (W01) es la pulsera física del prototipo; las otras tres son simuladas.
+   */
   sembrarDemostracion(usuario = "instalación") {
     if (this.q1("SELECT 1 FROM pulseras LIMIT 1")) return false;
     for (let n = 1; n <= 4; n++) {
       this.crearPulsera({ serie: `VC-W-${String(n).padStart(4, "0")}`, id_dispositivo: `W${String(n).padStart(2, "0")}`,
-        mac: `A4:C1:38:00:00:${n.toString(16).toUpperCase().padStart(2, "0")}`, modelo: "VitalCare v1", estado: "Disponible" }, usuario);
+        mac: `A4:C1:38:00:00:${n.toString(16).toUpperCase().padStart(2, "0")}`, modelo: "VitalCare v1", estado: "Disponible",
+        notas: n === 1 ? "Pulsera física del prototipo" : "Simulada (demostración)" }, usuario);
     }
-    const p1 = this.crearPaciente({ expediente: "EXP-2026-0001", nombre: "María", apellidos: "Pérez Gómez", fecha_nac: "1958-04-12",
+    this.crearPaciente({ expediente: "EXP-2026-0001", nombre: "María", apellidos: "Pérez Gómez", fecha_nac: "1958-04-12",
       sexo: "Femenino", habitacion: "305", cama: "A", diagnostico: "Neumonía adquirida en la comunidad", alergias: "Penicilina" }, usuario);
     this.crearPaciente({ expediente: "EXP-2026-0002", nombre: "Carlos", apellidos: "Martínez Díaz", fecha_nac: "2017-09-03",
       sexo: "Masculino", habitacion: "306", cama: "B", diagnostico: "Crisis asmática", alergias: "Ninguna conocida" }, usuario);
-    const w1 = this.pulseraPorDispositivo("W01");
-    this.asignarPulsera(p1, w1.id, usuario, "Asignación inicial al ingreso");
     return true;
   }
 }

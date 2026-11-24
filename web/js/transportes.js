@@ -112,6 +112,14 @@ export class SimuladorTransport extends Transporte {
     return true;
   }
 
+  /** Simula que al paciente le pusieron otra pulsera: cargada y con su propia numeración. */
+  cambiarPulsera(deviceId) {
+    this.deviceId = deviceId;
+    this._seq = 0;
+    this._historial = new Map();
+    this._batt = 100.0;
+  }
+
   dispararEvento(tipo) {
     if (tipo !== "FALL" && tipo !== "SOS") throw new Error("tipo debe ser 'FALL' o 'SOS'");
     this._pendientes.push(tipo);

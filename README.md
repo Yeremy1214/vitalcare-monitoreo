@@ -33,14 +33,17 @@ La base de datos es SQLite y viene incluida con Python, así que no hay nada má
 python app_testbed.py
 ```
 
-Arranca conectado al **simulador**, con dos pacientes y cuatro pulseras de ejemplo, así que se ve
-vivo sin hardware. Para comprobar que todo funciona en tu PC:
+Arranca con dos pacientes (María y Carlos) y cuatro pulseras de ejemplo, **sin ninguna pulsera
+asignada**. Como en un hospital, los datos solo se muestran cuando hay un paciente en monitoreo con
+su pulsera puesta: se elige al paciente, se le asigna una pulsera con *Cambiar pulsera* y se pulsa
+*Conectar*. La VC-W-0001 (W01) es la pulsera física del prototipo; las otras tres son simuladas, y el
+simulador transmite con el identificador de la pulsera que tenga el paciente. Para comprobar que todo funciona en tu PC:
 
 ```
 python pruebas_testbed.py
 ```
 
-Debe terminar con `33 de 33 pruebas correctas`.
+Debe terminar con `34 de 34 pruebas correctas`.
 
 ## Las cuatro pestañas
 
@@ -208,7 +211,7 @@ en `vitalcare.db`, junto al programa.
 | `estilo.py` | Colores y piezas de interfaz compartidas |
 | `emisor_udp_prueba.py` | Emisor de prueba para la fuente WiFi/UDP |
 | `emisor_mqtt_prueba.py` | Hub de prueba: publica una pulsera simulada por MQTT (sirve para la web y para el escritorio) |
-| `pruebas_testbed.py` | 33 pruebas automáticas |
+| `pruebas_testbed.py` | 34 pruebas automáticas |
 | `web/` | La versión web de la estación: misma lógica, mismas pantallas, misma base de datos |
 
 ## Atajos

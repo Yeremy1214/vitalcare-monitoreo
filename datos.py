@@ -758,20 +758,24 @@ class BaseDatos:
 
     # ---------------- datos de demostración ----------------
     def sembrar_demostracion(self, usuario="instalación"):
-        """Crea cuatro pulseras y dos pacientes de ejemplo la primera vez."""
+        """
+        Crea cuatro pulseras y dos pacientes de ejemplo la primera vez. Ninguna pulsera queda
+        asignada: en la demostración se ve el proceso completo (ingreso, asignación y monitoreo).
+        La VC-W-0001 (W01) es la pulsera física del prototipo; las otras tres son simuladas.
+        """
         if self.q1("SELECT 1 FROM pulseras LIMIT 1"):
             return False
         for n in range(1, 5):
             self.crear_pulsera({"serie": f"VC-W-{n:04d}", "id_dispositivo": f"W{n:02d}",
                                 "mac": f"A4:C1:38:00:00:{n:02X}", "modelo": "VitalCare v1",
-                                "estado": "Disponible"}, usuario)
-        p1 = self.crear_paciente({"expediente": "EXP-2026-0001", "nombre": "María", "apellidos": "Pérez Gómez",
+                                "estado": "Disponible",
+                                "notas": "Pulsera física del prototipo" if n == 1 else "Simulada (demostración)"},
+                               usuario)
+        self.crear_paciente({"expediente": "EXP-2026-0001", "nombre": "María", "apellidos": "Pérez Gómez",
                                   "fecha_nac": "1958-04-12", "sexo": "Femenino", "habitacion": "305",
                                   "cama": "A", "diagnostico": "Neumonía adquirida en la comunidad",
                                   "alergias": "Penicilina"}, usuario)
         self.crear_paciente({"expediente": "EXP-2026-0002", "nombre": "Carlos", "apellidos": "Martínez Díaz",
                              "fecha_nac": "2017-09-03", "sexo": "Masculino", "habitacion": "306", "cama": "B",
                              "diagnostico": "Crisis asmática", "alergias": "Ninguna conocida"}, usuario)
-        w1 = self.pulsera_por_dispositivo("W01")
-        self.asignar_pulsera(p1, w1["id"], usuario, "Asignación inicial al ingreso")
         return True

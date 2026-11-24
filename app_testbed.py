@@ -725,7 +725,7 @@ class Aplicacion(tk.Tk):
         self.combo_paciente.bind("<<ComboboxSelected>>", self._al_elegir_paciente)
         linea_ficha = tk.Frame(izq, bg=CARD)
         linea_ficha.pack(anchor="w", fill=tk.X, pady=(1, 0))
-        self.lbl_ficha = tk.Label(linea_ficha, text="Elija un paciente ingresado o trabaje en modo libre.",
+        self.lbl_ficha = tk.Label(linea_ficha, text="Elija un paciente ingresado con pulsera asignada para ver sus signos.",
                                   bg=CARD, fg=MUTED, font=(self.fam, 9), anchor="w")
         self.lbl_ficha.pack(side=tk.LEFT)
         self.lbl_alergias = tk.Label(linea_ficha, text="", bg=CARD, fg=ALERTA,
@@ -1029,7 +1029,7 @@ class Aplicacion(tk.Tk):
 
     def _refrescar_combo_pacientes(self):
         self._opciones_paciente = {}
-        etiquetas = ["Modo libre (sin paciente)"]
+        etiquetas = ["Sin paciente seleccionado"]
         for p in self.bd.listar_pacientes("", "Ingresado"):
             etiqueta = f"{nombre_completo(p)} · {ubicacion(p)} · {p['serie'] or 'sin pulsera'}"
             self._opciones_paciente[etiqueta] = p["id"]
@@ -1053,6 +1053,7 @@ class Aplicacion(tk.Tk):
 
     def monitorear_paciente(self, pid):
         """Deja la pantalla de monitoreo apuntando a este paciente y su pulsera."""
+        cambio = pid != self.paciente_id
         self.paciente_id = pid
         self.bd.fijar_interno("ultimo_paciente", pid or "", "Paciente que se estaba monitoreando")
         self.paciente = self.bd.paciente(pid) if pid else None
@@ -1069,6 +1070,15 @@ class Aplicacion(tk.Tk):
         if pid and asignacion:
             self.aviso(f"Monitoreando a {nombre_completo(self.paciente)} con la pulsera "
                        f"{asignacion['serie']} ({asignacion['id_dispositivo']}).")
+        elif pid:
+            self.aviso(f"{nombre_completo(self.paciente)} no tiene pulsera asignada: use Cambiar pulsera para "
+                       "asignarle una.")
+        # Cada sesión es de un paciente: al cambiar de paciente se cierra la sesión y se abre otra.
+        if cambio and self.hilo is not None:
+            fuente = self.fuente_actual
+            self._detener()
+            if pid and asignacion and fuente != FUENTE_BLE:
+                self._conectar()
 
     def _retomar_ultimo_paciente(self):
         """Al abrir, vuelve al paciente que se estaba monitoreando, si sigue ingresado."""
@@ -1091,8 +1101,8 @@ class Aplicacion(tk.Tk):
 
     def _pintar_ficha(self):
         if not self.paciente:
-            self.lbl_ficha.configure(text="Modo libre: se muestran los datos de cualquier pulsera, con los "
-                                          "umbrales de adulto en reposo.")
+            self.lbl_ficha.configure(text="Sin paciente en monitoreo. Elija uno con pulsera asignada: los datos de "
+                                          "una pulsera solo se muestran y se guardan si está puesta a un paciente.")
             self.lbl_pulsera.configure(text="Sin paciente", bg=GRIS_BG, fg=TEXTO)
             self.lbl_alergias.configure(text="")
             return
@@ -1131,12 +1141,16 @@ class Aplicacion(tk.Tk):
             return
         if info is None:
             self.dispositivo_esperado = None
+            if self.hilo is not None:
+                self._detener()  # sin pulsera no hay de dónde recibir datos de este paciente
             self._pintar_ficha()
             self._refrescar_combo_pacientes()
             return
         self.dispositivo_esperado = info["dispositivo"]
         if isinstance(self.transporte, MQTTTransport):
             self.transporte.id_destino = info["dispositivo"]
+        if isinstance(self.transporte, SimuladorTransport):
+            self.transporte.cambiar_pulsera(info["dispositivo"])  # la pulsera nueva, cargada, empieza su numeración
         self._ajenos = {}
         self.sesion.seq.reiniciar_secuencia()
         self._huecos = {}
@@ -1376,7 +1390,7 @@ class Aplicacion(tk.Tk):
 
     def _crear_transporte(self, fuente, param):
         if fuente == FUENTE_SIM:
-            return SimuladorTransport(intervalo_s=self.intervalo_sim)
+            return SimuladorTransport(device_id=self.dispositivo_esperado or "W01", intervalo_s=self.intervalo_sim)
         if fuente == FUENTE_BLE:
             param = param.strip() or "W01"
             if MAC_RE.match(param):
@@ -1406,6 +1420,14 @@ class Aplicacion(tk.Tk):
 
     def _conectar(self):
         if self.hilo is not None:
+            return
+        # Como en un hospital: primero se ingresa al paciente y se le pone la pulsera; después se monitorea.
+        if not self.paciente_id or not self.dispositivo_esperado:
+            texto = ("Elija primero al paciente en monitoreo." if not self.paciente_id else
+                     "Este paciente no tiene pulsera asignada: use Cambiar pulsera para asignarle una.")
+            self.aviso(texto)
+            self._banner_obsoleto("SIN PACIENTE" if not self.paciente_id else "SIN PULSERA ASIGNADA")
+            self.lbl_causas.config(text=texto)
             return
         fuente = self.var_fuente.get()
         try:
@@ -1630,12 +1652,22 @@ class Aplicacion(tk.Tk):
 
     def _es_del_paciente(self, p):
         """
-        Con un paciente seleccionado, solo se aceptan los paquetes de la pulsera que
-        tiene asignada. Si llega otra, se avisa en lugar de mezclar datos de dos personas.
+        Solo se aceptan los paquetes de la pulsera asignada al paciente en monitoreo. Si llega
+        otra, o no hay paciente con pulsera, se avisa en lugar de mostrar datos de nadie.
         """
-        if not self.dispositivo_esperado:
-            return True
         ident = str(p.get("id") or "").strip()
+        if not self.dispositivo_esperado:
+            if ident and ident not in self._ajenos:
+                self._ajenos[ident] = True
+                duena = self.bd.paciente_por_dispositivo(ident)
+                de_quien = (f", asignada a {duena['nombre']} {duena['apellidos']}" if duena
+                            else ", que no está asignada a ningún paciente")
+                self._nueva_alerta(
+                    "Pulsera transmitiendo sin paciente en monitoreo",
+                    f"Llegan datos de la pulsera {ident}{de_quien}. No se muestran ni se guardan hasta que se elija "
+                    "al paciente y tenga esa pulsera asignada.", "MEDIA", "SISTEMA", "PULSERA_SIN_PACIENTE", None,
+                    requiere_atencion=False, leve=True)
+            return False
         if ident == self.dispositivo_esperado:
             return True
         if ident and ident not in self._ajenos:
@@ -1692,6 +1724,8 @@ class Aplicacion(tk.Tk):
                                escalamiento_s=self.cfg["escalamiento_bateria_baja_s"], leve=True)
 
     def _manejar_evento(self, p):
+        if not self._es_del_paciente(p):
+            return
         if self.registrador is not None:
             self.registrador.registrar_evento(p)
         ahora = time.time()

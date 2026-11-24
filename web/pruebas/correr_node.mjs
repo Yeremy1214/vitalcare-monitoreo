@@ -1,6 +1,6 @@
-// Corre con Node las pruebas que no necesitan ventana (30 de 32):
+// Corre con Node las pruebas que no necesitan ventana:
 //   node web/pruebas/correr_node.mjs
-// Las dos de la ventana se corren abriendo /pruebas/ en el navegador.
+// Las de la ventana se corren abriendo /pruebas/ en el navegador.
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -16,5 +16,5 @@ const fallos = await correr(pruebas, (r) => {
   console.log(`  ${r.ok ? "OK   " : "FALLA"} ${r.nombre}`);
   if (!r.ok) console.log(r.error.split("\n").map((l) => "        " + l).join("\n"));
 });
-console.log(`\n${pruebas.length - fallos} de ${pruebas.length} pruebas correctas (las 2 de la ventana se corren en /pruebas/ del navegador)`);
+console.log(`\n${pruebas.length - fallos} de ${pruebas.length} pruebas correctas (las de la ventana se corren en /pruebas/ del navegador)`);
 process.exit(fallos ? 1 : 0);

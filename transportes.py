@@ -162,6 +162,13 @@ class SimuladorTransport(Transporte):
             self._reenvios.put(int(s))
         return True
 
+    def cambiar_pulsera(self, device_id):
+        """Simula que al paciente le pusieron otra pulsera: cargada y con su propia numeración."""
+        self.device_id = device_id
+        self._seq = 0
+        self._historial = {}
+        self._batt = 100.0
+
     def disparar_evento(self, tipo):
         """Encola un evento FALL o SOS para enviarlo de inmediato."""
         if tipo not in ("FALL", "SOS"):
